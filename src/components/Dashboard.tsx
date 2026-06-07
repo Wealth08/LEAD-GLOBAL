@@ -456,13 +456,6 @@ export default function Dashboard({ onNavigate, currentLanguage }: DashboardProp
             </span>
 
             <button
-              onClick={() => onNavigate('admin')}
-              className="px-3.5 py-1 text-[10px] uppercase font-mono bg-amber-950/20 border border-amber-500/20 text-[#D4AF37] hover:bg-amber-500 hover:text-black transition duration-200 rounded-full"
-            >
-              Admin Panel
-            </button>
-
-            <button
               id="disconnect-btn"
               onClick={handleLogout}
               className="text-xs text-gray-400 hover:text-[#D4AF37] font-mono border border-white/[0.1] px-3.5 py-1.5 rounded-full hover:bg-white/[0.02] transition"
