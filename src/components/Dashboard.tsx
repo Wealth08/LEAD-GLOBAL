@@ -27,9 +27,10 @@ import {
   CheckCircle2,
   ListFilter,
   RefreshCw,
+  Megaphone,
 } from 'lucide-react';
 import Logo from './Logo';
-import { dbService, PLANS } from '../supabaseMock';
+import { dbService, PLANS, uploadImage, supabase } from '../supabaseMock';
 import {
   UserProfile,
   Transaction,
@@ -41,12 +42,59 @@ import {
 } from '../types';
 import { TRANSLATIONS } from '../translations';
 
+// ─── Reusable Image Upload Component ─────────────────────────────────────────
+function ImageUploadField({
+  label,
+  bucket,
+  onUploaded,
+  accept = 'image/*',
+}: {
+  label: string;
+  bucket: 'deposits' | 'kyc' | 'tasks' | 'support';
+  onUploaded: (url: string) => void;
+  accept?: string;
+}) {
+  const [uploading, setUploading] = useState(false);
+  const [preview, setPreview] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > 5 * 1024 * 1024) { setError('File too large. Max 5MB.'); return; }
+    setError(null);
+    setUploading(true);
+    const localUrl = URL.createObjectURL(file);
+    setPreview(localUrl);
+    const { url, error: uploadErr } = await uploadImage(file, bucket);
+    setUploading(false);
+    if (uploadErr || !url) { setError('Upload failed. Try again.'); setPreview(null); return; }
+    onUploaded(url);
+  };
+
+  return (
+    <div className="space-y-2">
+      <label className="text-[9px] font-mono text-gray-500 uppercase tracking-wider block">{label}</label>
+      <label className={`flex items-center gap-3 cursor-pointer w-full bg-[#1A1A1C] border-2 border-dashed ${error ? 'border-red-500/40' : 'border-white/[0.08]'} hover:border-[#D4AF37]/50 rounded-xl py-3 px-4 transition`}>
+        <input type="file" accept={accept} onChange={handleFile} className="hidden" />
+        {uploading ? (
+          <><RefreshCw className="w-4 h-4 text-[#D4AF37] animate-spin" /><span className="text-xs text-gray-400 font-mono">Uploading…</span></>
+        ) : preview ? (
+          <><img src={preview} alt="preview" className="w-10 h-10 object-cover rounded-lg border border-white/10" /><span className="text-xs text-emerald-400 font-mono">✓ Uploaded</span></>
+        ) : (
+          <><svg className="w-5 h-5 text-gray-500" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5" /></svg><span className="text-xs text-gray-500 font-mono">Click to upload image (max 5MB)</span></>
+        )}
+      </label>
+      {error && <p className="text-[10px] text-red-400 font-mono">{error}</p>}
+    </div>
+  );
+}
+
 interface DashboardProps {
   onNavigate: (view: 'home' | 'auth' | 'dashboard' | 'admin', payload?: any) => void;
   currentLanguage: Language;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
 export default function Dashboard({ onNavigate, currentLanguage }: DashboardProps) {
   const [user, setUser] = useState<UserProfile | null>(null);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
@@ -59,12 +107,10 @@ export default function Dashboard({ onNavigate, currentLanguage }: DashboardProp
     'overview' | 'invest' | 'funding' | 'referrals' | 'tasks' | 'kyc' | 'support'
   >('overview');
 
-  // Deposit form
   const [depositAmount, setDepositAmount] = useState('100');
   const [depositHash, setDepositHash] = useState('');
   const [depositProofUrl, setDepositProofUrl] = useState('');
 
-  // Bank form
   const [bankName, setBankName] = useState('');
   const [accName, setAccName] = useState('');
   const [accNumber, setAccNumber] = useState('');
@@ -74,25 +120,21 @@ export default function Dashboard({ onNavigate, currentLanguage }: DashboardProp
   const [currency, setCurrency] = useState('USD');
   const [isPreferred, setIsPreferred] = useState(true);
 
-  // KYC form
   const [kycFullName, setKycFullName] = useState('');
   const [kycIdType, setKycIdType] = useState('Passport');
   const [kycIdNumber, setKycIdNumber] = useState('');
   const [kycSelfieUrl, setKycSelfieUrl] = useState('');
   const [kycAddressUrl, setKycAddressUrl] = useState('');
 
-  // Withdrawal form
   const [withdrawAmount, setWithdrawAmount] = useState('50');
   const [withdrawBankId, setWithdrawBankId] = useState('');
 
-  // Support tickets
   const [ticketSubject, setTicketSubject] = useState('');
   const [ticketCategory, setTicketCategory] = useState('Finance');
   const [ticketMessage, setTicketMessage] = useState('');
   const [selectedTicketId, setSelectedTicketId] = useState<string | null>(null);
   const [ticketReplyText, setTicketReplyText] = useState('');
 
-  // Notification prefs
   const [tgHandle, setTgHandle] = useState('');
   const [waNum, setWaNum] = useState('');
   const [notifPreferences, setNotifPreferences] = useState({
@@ -101,13 +143,21 @@ export default function Dashboard({ onNavigate, currentLanguage }: DashboardProp
     email: true,
   });
 
-  // UI states
+  // Image upload URLs
+  const [depositProofImageUrl, setDepositProofImageUrl] = useState('');
+  const [kycSelfieImageUrl, setKycSelfieImageUrl] = useState('');
+  const [taskProofImageUrl, setTaskProofImageUrl] = useState<Record<string, string>>({});
+  const [ticketImageUrl, setTicketImageUrl] = useState('');
+  const [ticketReplyImageUrl, setTicketReplyImageUrl] = useState('');
+
+  // Announcements
+  const [announcements, setAnnouncements] = useState<{ id: string; text: string; imageUrl?: string; date: string }[]>([]);
+
   const [toast, setToast] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [copiedLink, setCopiedLink] = useState(false);
   const [viewingReceipt, setViewingReceipt] = useState<Transaction | null>(null);
-  const [actionLoading, setActionLoading] = useState<string | null>(null); // tracks which action is in-flight
+  const [actionLoading, setActionLoading] = useState<string | null>(null);
 
-  // ── Data Loading ────────────────────────────────────────────────────────────
   const refreshData = useCallback(async () => {
     setIsLoadingData(true);
     try {
@@ -118,19 +168,16 @@ export default function Dashboard({ onNavigate, currentLanguage }: DashboardProp
       }
       setUser(profile);
 
-      // Prefill notification fields from profile
       if (profile.telegramHandle) setTgHandle(profile.telegramHandle);
       if (profile.whatsappNumber) setWaNum(profile.whatsappNumber);
       setNotifPreferences(profile.notificationsEnabled);
 
-      // KYC prefill
       if (profile.kyc) {
         setKycFullName(profile.kyc.fullName || '');
         setKycIdType(profile.kyc.idType || 'Passport');
         setKycIdNumber(profile.kyc.idNumber || '');
       }
 
-      // Parallel fetches
       const [txs, tks, logs, banks] = await Promise.all([
         dbService.getCurrentUserTransactions(),
         dbService.getCurrentUserTickets(),
@@ -151,9 +198,18 @@ export default function Dashboard({ onNavigate, currentLanguage }: DashboardProp
 
   useEffect(() => {
     refreshData();
+
+    // Load announcements and subscribe to real-time updates
+    dbService.getAnnouncements().then(setAnnouncements);
+    const channel = dbService.subscribeToAnnouncements((ann) => {
+      setAnnouncements(prev => [ann, ...prev]);
+    });
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, [refreshData]);
 
-  // ── Helpers ─────────────────────────────────────────────────────────────────
   const showToastMsg = (type: 'success' | 'error', text: string) => {
     setToast({ type, text });
     setTimeout(() => setToast(null), 4000);
@@ -173,7 +229,6 @@ export default function Dashboard({ onNavigate, currentLanguage }: DashboardProp
 
   const isRTL = currentLanguage === 'ar';
 
-  // ── Event Handlers ──────────────────────────────────────────────────────────
   const handleCopyReferral = () => {
     if (!user) return;
     const link = `https://leadsglobal.com/signup?ref=${user.referralCode}`;
@@ -223,24 +278,15 @@ export default function Dashboard({ onNavigate, currentLanguage }: DashboardProp
   const handleDepositSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const amountNum = parseFloat(depositAmount);
-    if (!amountNum || amountNum <= 0) {
-      showToastMsg('error', 'Please enter a valid deposit amount.');
-      return;
-    }
+    if (!amountNum || amountNum <= 0) { showToastMsg('error', 'Please enter a valid deposit amount.'); return; }
+    if (!depositProofImageUrl) { showToastMsg('error', 'Please upload a payment screenshot.'); return; }
     await withLoading('deposit', async () => {
-      const simulatedUrl =
-        depositProofUrl ||
-        `https://leadsglobal.com/proofs/deposit_${Math.floor(1000 + Math.random() * 9000)}.jpg`;
-      const res = await dbService.submitDeposit(amountNum, depositHash || undefined, simulatedUrl);
+      const res = await dbService.submitDeposit(amountNum, depositHash || undefined, depositProofImageUrl);
       if (res.success) {
         showToastMsg('success', res.message);
-        setDepositAmount('100');
-        setDepositHash('');
-        setDepositProofUrl('');
+        setDepositAmount('100'); setDepositHash(''); setDepositProofImageUrl('');
         await refreshData();
-      } else {
-        showToastMsg('error', res.message);
-      }
+      } else { showToastMsg('error', res.message); }
     });
   };
 
@@ -258,26 +304,16 @@ export default function Dashboard({ onNavigate, currentLanguage }: DashboardProp
 
   const handleKYCSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!kycFullName || !kycIdNumber) {
-      showToastMsg('error', 'Legal name and ID number are required.');
-      return;
-    }
+    if (!kycFullName || !kycIdNumber) { showToastMsg('error', 'Legal name and ID number are required.'); return; }
+    if (!kycSelfieImageUrl) { showToastMsg('error', 'Please upload a selfie with your ID.'); return; }
     await withLoading('kyc', async () => {
-      const selfie = kycSelfieUrl || 'https://leadsglobal.com/kyc/selfie_verified.jpg';
-      const address = kycAddressUrl || 'https://leadsglobal.com/kyc/address_verified.jpg';
       const res = await dbService.submitKYC({
-        fullName: kycFullName,
-        idType: kycIdType,
-        idNumber: kycIdNumber,
-        selfieUrl: selfie,
-        addressProofUrl: address,
+        fullName: kycFullName, idType: kycIdType, idNumber: kycIdNumber,
+        selfieUrl: kycSelfieImageUrl,
+        addressProofUrl: kycAddressUrl || undefined,
       });
-      if (res.success) {
-        showToastMsg('success', res.message);
-        await refreshData();
-      } else {
-        showToastMsg('error', res.message);
-      }
+      if (res.success) { showToastMsg('success', res.message); await refreshData(); }
+      else { showToastMsg('error', res.message); }
     });
   };
 
@@ -317,20 +353,14 @@ export default function Dashboard({ onNavigate, currentLanguage }: DashboardProp
 
   const handleOpenTicketSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!ticketSubject || !ticketMessage) {
-      showToastMsg('error', 'Subject and message are required.');
-      return;
-    }
+    if (!ticketSubject || !ticketMessage) { showToastMsg('error', 'Subject and message are required.'); return; }
     await withLoading('ticket', async () => {
-      const res = await dbService.openSupportTicket(ticketSubject, ticketCategory, ticketMessage);
+      const res = await dbService.openSupportTicket(ticketSubject, ticketCategory, ticketMessage, ticketImageUrl || undefined);
       if (res.success) {
         showToastMsg('success', res.message);
-        setTicketSubject('');
-        setTicketMessage('');
+        setTicketSubject(''); setTicketMessage(''); setTicketImageUrl('');
         await refreshData();
-      } else {
-        showToastMsg('error', res.message);
-      }
+      } else { showToastMsg('error', res.message); }
     });
   };
 
@@ -338,13 +368,11 @@ export default function Dashboard({ onNavigate, currentLanguage }: DashboardProp
     e.preventDefault();
     if (!selectedTicketId || !ticketReplyText) return;
     await withLoading('reply', async () => {
-      const res = await dbService.replyToTicket(selectedTicketId, ticketReplyText, 'user');
+      const res = await dbService.replyToTicket(selectedTicketId, ticketReplyText, 'user', ticketReplyImageUrl || undefined);
       if (res.success) {
-        setTicketReplyText('');
+        setTicketReplyText(''); setTicketReplyImageUrl('');
         await refreshData();
-      } else {
-        showToastMsg('error', res.message);
-      }
+      } else { showToastMsg('error', res.message); }
     });
   };
 
@@ -352,30 +380,19 @@ export default function Dashboard({ onNavigate, currentLanguage }: DashboardProp
     if (taskId === 'task-checkin') {
       await withLoading(`task_${taskId}`, async () => {
         const res = await dbService.submitTaskProof(taskId);
-        if (res.success) {
-          showToastMsg('success', res.message);
-          await refreshData();
-        } else {
-          showToastMsg('error', res.message);
-        }
+        if (res.success) { showToastMsg('success', res.message); await refreshData(); }
+        else { showToastMsg('error', res.message); }
       });
     } else {
-      const proofStr = prompt(
-        `Submit proof for: "${title}"\nPaste your social media link or handle proving completion:`
-      );
-      if (proofStr === null) return;
-      if (!proofStr.trim()) {
-        showToastMsg('error', 'You must supply a proof text or link.');
-        return;
-      }
+      const imgUrl = taskProofImageUrl[taskId];
+      if (!imgUrl) { showToastMsg('error', 'Please upload a screenshot as proof before submitting.'); return; }
       await withLoading(`task_${taskId}`, async () => {
-        const res = await dbService.submitTaskProof(taskId, proofStr);
+        const res = await dbService.submitTaskProof(taskId, title, imgUrl);
         if (res.success) {
           showToastMsg('success', res.message);
+          setTaskProofImageUrl(prev => { const n = { ...prev }; delete n[taskId]; return n; });
           await refreshData();
-        } else {
-          showToastMsg('error', res.message);
-        }
+        } else { showToastMsg('error', res.message); }
       });
     }
   };
@@ -387,7 +404,6 @@ export default function Dashboard({ onNavigate, currentLanguage }: DashboardProp
 
   const handlePrintReceipt = () => window.print();
 
-  // ── Guard: loading + not authed ─────────────────────────────────────────────
   if (isLoadingData && !user) {
     return (
       <div className="min-h-screen bg-[#0C0C0D] flex items-center justify-center">
@@ -410,7 +426,6 @@ export default function Dashboard({ onNavigate, currentLanguage }: DashboardProp
     planTarget > 0 ? Math.min(100, (planAccumulated / planTarget) * 100) : 0;
   const withdrawalUnlockedState = activePlanDetails && planAccumulated >= planTarget;
 
-  // ── Render ──────────────────────────────────────────────────────────────────
   return (
     <div
       id="dashboard-view"
@@ -455,6 +470,8 @@ export default function Dashboard({ onNavigate, currentLanguage }: DashboardProp
               Status: <strong className="text-white ml-1">{user.status}</strong>
             </span>
 
+            {/* ── Admin Panel button REMOVED ── */}
+
             <button
               id="disconnect-btn"
               onClick={handleLogout}
@@ -471,6 +488,17 @@ export default function Dashboard({ onNavigate, currentLanguage }: DashboardProp
 
         {/* Alert Banners */}
         <div className="space-y-4 mb-8">
+          {/* Admin custom notice */}
+          {(user as any).customNotice && (
+            <div className="p-4 bg-purple-950/30 border border-purple-500/20 text-purple-200 rounded-xl flex items-center gap-3">
+              <Megaphone className="w-5 h-5 shrink-0 text-purple-400" />
+              <div className="text-xs">
+                <span className="font-bold uppercase block mb-1">NOTICE FROM ADMIN</span>
+                <p>{(user as any).customNotice}</p>
+              </div>
+            </div>
+          )}
+
           {!user.isEmailVerified && (
             <div className="p-4 bg-[#1C170E] border border-[#D4AF37]/30 text-[#D4AF37] rounded-xl flex items-center gap-3">
               <AlertCircle className="w-5 h-5 shrink-0" />
@@ -532,7 +560,6 @@ export default function Dashboard({ onNavigate, currentLanguage }: DashboardProp
         {/* ── OVERVIEW TAB ── */}
         {activeTab === 'overview' && (
           <div className="space-y-8 animate-fadeIn">
-            {/* Balance Cards */}
             <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-6">
               {[
                 {
@@ -579,9 +606,7 @@ export default function Dashboard({ onNavigate, currentLanguage }: DashboardProp
               ))}
             </div>
 
-            {/* Mid Row: Chart + Plan Progress */}
             <div className="grid lg:grid-cols-12 gap-8">
-              {/* Growth Chart */}
               <div className="lg:col-span-8 liquid-glass p-6 rounded-3xl overflow-hidden">
                 <div className="flex items-center justify-between mb-6">
                   <div>
@@ -601,7 +626,6 @@ export default function Dashboard({ onNavigate, currentLanguage }: DashboardProp
                   <div className="absolute inset-0 flex flex-col justify-between p-4 pointer-events-none opacity-20">
                     {[0,1,2,3].map(i => <div key={i} className="border-t border-dashed border-gray-600 w-full" />)}
                   </div>
-
                   <svg className="absolute inset-0 w-full h-full" preserveAspectRatio="none">
                     <defs>
                       <linearGradient id="chartGradient" x1="0" y1="0" x2="0" y2="1">
@@ -609,30 +633,17 @@ export default function Dashboard({ onNavigate, currentLanguage }: DashboardProp
                         <stop offset="100%" stopColor="#D4AF37" stopOpacity="0" />
                       </linearGradient>
                     </defs>
-                    <path
-                      d="M 50 210 Q 150 170 250 140 T 450 110 T 650 60 T 800 30 L 800 250 L 50 250 Z"
-                      fill="url(#chartGradient)"
-                    />
-                    <path
-                      d="M 50 210 Q 150 170 250 140 T 450 110 T 650 60 T 800 30"
-                      fill="none"
-                      stroke="#D4AF37"
-                      strokeWidth="2.5"
-                      strokeLinecap="round"
-                    />
-                    {[
-                      [50, 210], [250, 140], [450, 110], [650, 60],
-                    ].map(([cx, cy], i) => (
+                    <path d="M 50 210 Q 150 170 250 140 T 450 110 T 650 60 T 800 30 L 800 250 L 50 250 Z" fill="url(#chartGradient)" />
+                    <path d="M 50 210 Q 150 170 250 140 T 450 110 T 650 60 T 800 30" fill="none" stroke="#D4AF37" strokeWidth="2.5" strokeLinecap="round" />
+                    {[[50, 210], [250, 140], [450, 110], [650, 60]].map(([cx, cy], i) => (
                       <circle key={i} cx={cx} cy={cy} r="4" fill="#FFFFFF" stroke="#D4AF37" strokeWidth="2" />
                     ))}
                     <circle cx="800" cy="30" r="5" fill="#D4AF37" />
                   </svg>
-
                   <div className="absolute bottom-2 inset-x-0 px-6 flex justify-between text-[9px] font-mono text-gray-500">
                     <span>Mon</span><span>Tue</span><span>Wed</span><span>Thu</span>
                     <span>Fri (Credit)</span><span>Weekend (Pause)</span>
                   </div>
-
                   <div className="absolute top-6 left-6 flex items-center gap-2 bg-[#141416]/90 py-1.5 px-3 rounded-lg border border-white/[0.05]">
                     <TrendingUp className="w-3.5 h-3.5 text-[#D4AF37]" />
                     <span className="text-[10px] font-mono text-gray-400">
@@ -643,14 +654,10 @@ export default function Dashboard({ onNavigate, currentLanguage }: DashboardProp
 
                 <div className="mt-4 flex items-center gap-2 text-[10px] text-gray-500">
                   <Info className="w-3.5 h-3.5 text-[#D4AF37] shrink-0" />
-                  <p>
-                    Earnings generated automatically Mon–Fri. Saturday and Sunday are
-                    excluded.
-                  </p>
+                  <p>Earnings generated automatically Mon–Fri. Saturday and Sunday are excluded.</p>
                 </div>
               </div>
 
-              {/* Plan Progress */}
               <div className="lg:col-span-4 liquid-glass p-6 rounded-3xl flex flex-col justify-between h-full">
                 <div>
                   <span className="text-[10px] uppercase font-mono text-gray-500 tracking-wider block mb-2">
@@ -682,14 +689,10 @@ export default function Dashboard({ onNavigate, currentLanguage }: DashboardProp
                           <span>{targetCompletedRatio.toFixed(1)}%</span>
                         </div>
                       </div>
-
                       <div className="space-y-2.5 text-xs text-gray-400 leading-normal bg-[#1C170E]/30 p-3 rounded-xl border border-[#D4AF37]/10">
                         <div className="flex items-start gap-2">
                           <Clock className="w-4 h-4 text-[#D4AF37] shrink-0 mt-0.5" />
-                          <p>
-                            Withdrawals unlock once plan returns equal the original investment
-                            (${activePlanDetails.price}).
-                          </p>
+                          <p>Withdrawals unlock once plan returns equal the original investment (${activePlanDetails.price}).</p>
                         </div>
                         <div className="flex items-start gap-2 border-t border-white/[0.03] pt-2">
                           <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
@@ -701,8 +704,7 @@ export default function Dashboard({ onNavigate, currentLanguage }: DashboardProp
                     <div className="mt-8 text-center py-6">
                       <Briefcase className="w-12 h-12 text-gray-700 mx-auto opacity-40" />
                       <p className="text-xs text-gray-500 mt-3 leading-relaxed">
-                        No active plan detected. Purchase an investment package to start
-                        tracking returns.
+                        No active plan detected. Purchase an investment package to start tracking returns.
                       </p>
                       <button
                         onClick={() => setActiveTab('invest')}
@@ -735,11 +737,8 @@ export default function Dashboard({ onNavigate, currentLanguage }: DashboardProp
                           : 'bg-white/[0.03] text-gray-500 border border-white/[0.05] cursor-not-allowed'
                       }`}
                     >
-                      {withdrawalUnlockedState
-                        ? 'Execute Wire Withdrawal'
-                        : 'Withdrawal Locked (Target Incomplete)'}
+                      {withdrawalUnlockedState ? 'Execute Wire Withdrawal' : 'Withdrawal Locked (Target Incomplete)'}
                     </button>
-
                     {!withdrawalUnlockedState && (
                       <span className="block text-center text-[9px] text-gray-500 font-mono italic">
                         Earn ${(planTarget - planAccumulated).toFixed(2)} more to unlock.
@@ -750,17 +749,13 @@ export default function Dashboard({ onNavigate, currentLanguage }: DashboardProp
               </div>
             </div>
 
-            {/* Transactions + Notifications */}
             <div className="grid lg:grid-cols-12 gap-8">
-              {/* Transaction Table */}
               <div className="lg:col-span-8 liquid-glass p-6 rounded-3xl">
                 <div className="flex items-center justify-between mb-6 pb-2 border-b border-white/[0.04]">
                   <h3 className="text-sm font-bold uppercase tracking-wider text-white font-display text-glow">
                     Cryptographic Audit Log / Receipts
                   </h3>
-                  <span className="text-[10px] text-gray-500 font-mono">
-                    Total: {transactions.length}
-                  </span>
+                  <span className="text-[10px] text-gray-500 font-mono">Total: {transactions.length}</span>
                 </div>
 
                 {transactions.length === 0 ? (
@@ -785,20 +780,14 @@ export default function Dashboard({ onNavigate, currentLanguage }: DashboardProp
                           <tr key={tx.id} className="hover:bg-white/[0.01]">
                             <td className="py-3">
                               <p className="font-mono text-[10px] text-[#C5A059] font-bold">{tx.receiptId}</p>
-                              <span className="text-[9px] text-gray-500 font-mono">
-                                {new Date(tx.date).toLocaleDateString()}
-                              </span>
+                              <span className="text-[9px] text-gray-500 font-mono">{new Date(tx.date).toLocaleDateString()}</span>
                             </td>
                             <td className="py-3 capitalize">
-                              <span
-                                className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[9px] font-mono leading-none ${
-                                  tx.type === 'deposit'
-                                    ? 'bg-emerald-950/40 border border-emerald-500/20 text-emerald-400'
-                                    : tx.type === 'withdrawal'
-                                    ? 'bg-amber-950/40 border border-amber-500/20 text-amber-400'
-                                    : 'bg-[#1C170E] border border-[#D4AF37]/20 text-[#D4AF37]'
-                                }`}
-                              >
+                              <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[9px] font-mono leading-none ${
+                                tx.type === 'deposit' ? 'bg-emerald-950/40 border border-emerald-500/20 text-emerald-400'
+                                : tx.type === 'withdrawal' ? 'bg-amber-950/40 border border-amber-500/20 text-amber-400'
+                                : 'bg-[#1C170E] border border-[#D4AF37]/20 text-[#D4AF37]'
+                              }`}>
                                 <span className="w-1 h-1 rounded-full bg-current" />
                                 {tx.type.replace('_', ' ')}
                               </span>
@@ -809,15 +798,11 @@ export default function Dashboard({ onNavigate, currentLanguage }: DashboardProp
                               </span>
                             </td>
                             <td className="py-3 text-center">
-                              <span
-                                className={`px-2 py-0.5 rounded text-[9px] font-mono uppercase ${
-                                  tx.status === 'approved'
-                                    ? 'bg-emerald-950 text-emerald-400 font-bold'
-                                    : tx.status === 'rejected'
-                                    ? 'bg-red-950 text-red-400'
-                                    : 'bg-gray-800 text-gray-400 animate-pulse'
-                                }`}
-                              >
+                              <span className={`px-2 py-0.5 rounded text-[9px] font-mono uppercase ${
+                                tx.status === 'approved' ? 'bg-emerald-950 text-emerald-400 font-bold'
+                                : tx.status === 'rejected' ? 'bg-red-950 text-red-400'
+                                : 'bg-gray-800 text-gray-400 animate-pulse'
+                              }`}>
                                 {tx.status}
                               </span>
                             </td>
@@ -837,23 +822,30 @@ export default function Dashboard({ onNavigate, currentLanguage }: DashboardProp
                 )}
               </div>
 
-              {/* Notification Feed placeholder */}
               <div className="lg:col-span-4 bg-[#111112] p-6 rounded-3xl border border-white/[0.04]">
                 <div className="flex items-center gap-2 pb-2 border-b border-white/[0.03] mb-4">
                   <Bell className="w-4 h-4 text-[#D4AF37]" />
-                  <h3 className="text-xs font-bold uppercase tracking-wider text-white">
-                    Activity Alerts
-                  </h3>
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-white">Platform Announcements</h3>
+                  <span className="ml-auto text-[8px] bg-red-500 text-white font-mono font-bold px-1.5 py-0.5 rounded-full animate-pulse">LIVE</span>
                 </div>
-                <p className="text-[10px] text-gray-500 leading-normal">
-                  Real-time alerts for transactions, KYC milestones, and withdrawal events appear
-                  here as they are processed by the platform.
-                </p>
-                <div className="mt-4 p-4 bg-[#0A0A0B] text-center rounded-xl border border-white/[0.02]">
-                  <span className="text-[10px] text-gray-600 font-mono">
-                    Connect Telegram or WhatsApp in your profile to receive real push alerts.
-                  </span>
-                </div>
+                {announcements.length === 0 ? (
+                  <div className="text-center py-8">
+                    <Bell className="w-8 h-8 mx-auto text-gray-700 opacity-30" />
+                    <p className="text-[10px] text-gray-600 font-mono mt-2">No announcements yet.</p>
+                  </div>
+                ) : (
+                  <div className="space-y-3 max-h-64 overflow-y-auto pr-1">
+                    {announcements.map((ann) => (
+                      <div key={ann.id} className="p-3 bg-[#1C170E]/60 border border-[#D4AF37]/15 rounded-xl space-y-2">
+                        <p className="text-[11px] text-gray-200 leading-relaxed">{ann.text}</p>
+                        {ann.imageUrl && (
+                          <img src={ann.imageUrl} alt="announcement" className="w-full rounded-lg border border-white/10 object-cover max-h-32" />
+                        )}
+                        <span className="text-[9px] text-gray-600 font-mono block">{new Date(ann.date).toLocaleString()}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
           </div>
@@ -863,30 +855,21 @@ export default function Dashboard({ onNavigate, currentLanguage }: DashboardProp
         {activeTab === 'invest' && (
           <div className="space-y-8 animate-fadeIn">
             <div className="bg-[#111112] p-8 rounded-3xl border border-white/[0.04]">
-              <span className="text-[#C5A059] font-mono text-xs uppercase block mb-1">
-                Portfolio Tier Management
-              </span>
+              <span className="text-[#C5A059] font-mono text-xs uppercase block mb-1">Portfolio Tier Management</span>
               <h2 className="text-xl font-bold">Purchase or upgrade your investment plan:</h2>
               <p className="text-xs text-gray-400 max-w-2xl mt-2 leading-relaxed">
-                Choose a plan matching your liquidity. Only one active plan generates daily yields
-                at a time.
+                Choose a plan matching your liquidity. Only one active plan generates daily yields at a time.
               </p>
 
               {user.activePlanId && (
                 <div className="mt-6 p-4 bg-gradient-to-r from-[#1C170E] to-[#121214] border border-[#D4AF37]/30 rounded-2xl flex items-center justify-between">
                   <div>
-                    <span className="text-[9px] font-mono text-[#D4AF37] uppercase tracking-widest block font-bold animate-pulse">
-                      Running Package
-                    </span>
-                    <h4 className="text-base font-bold text-white mt-1">
-                      Active: {PLANS[user.activePlanId].name} (${PLANS[user.activePlanId].price})
-                    </h4>
+                    <span className="text-[9px] font-mono text-[#D4AF37] uppercase tracking-widest block font-bold animate-pulse">Running Package</span>
+                    <h4 className="text-base font-bold text-white mt-1">Active: {PLANS[user.activePlanId].name} (${PLANS[user.activePlanId].price})</h4>
                   </div>
                   <div className="text-right font-mono">
                     <span className="text-xs text-gray-500">Accumulated Returns:</span>
-                    <p className="text-lg font-bold text-[#D4AF37]">
-                      ${user.planAccumulatedEarnings.toFixed(2)}
-                    </p>
+                    <p className="text-lg font-bold text-[#D4AF37]">${user.planAccumulatedEarnings.toFixed(2)}</p>
                   </div>
                 </div>
               )}
@@ -896,48 +879,31 @@ export default function Dashboard({ onNavigate, currentLanguage }: DashboardProp
                   const isOwned = user.activePlanId === p.id;
                   const canBuy = user.walletBalance >= p.price;
                   const isLoading = actionLoading === `plan_${p.id}`;
-
                   return (
-                    <div
-                      key={p.id}
-                      className={`p-6 bg-[#0E0E0F] rounded-2xl border ${
-                        isOwned ? 'border-[#D4AF37]' : 'border-white/[0.04]'
-                      } flex flex-col justify-between h-80`}
-                    >
+                    <div key={p.id} className={`p-6 bg-[#0E0E0F] rounded-2xl border ${isOwned ? 'border-[#D4AF37]' : 'border-white/[0.04]'} flex flex-col justify-between h-80`}>
                       <div>
                         <h3 className="text-base font-bold text-white">{p.name}</h3>
-                        <p className="text-3xl font-bold text-[#D4AF37] font-mono mt-2">
-                          ${p.price}
-                        </p>
+                        <p className="text-3xl font-bold text-[#D4AF37] font-mono mt-2">${p.price}</p>
                         <div className="mt-4 space-y-2 text-[11px] text-gray-400">
                           <p>&bull; Earn <strong>${p.dailyEarning}/day</strong> weekdays</p>
                           <p>&bull; Sat/Sun pause</p>
                           <p>&bull; Target: <strong>${p.price}</strong> before withdrawal</p>
                         </div>
                       </div>
-
                       <button
                         disabled={isOwned || !canBuy || user.status === 'Pending Verification' || isLoading}
                         onClick={() => handleBuyPlan(p.id)}
                         className={`mt-4 w-full py-2.5 rounded-xl font-mono text-[10px] uppercase tracking-wider font-bold transition flex items-center justify-center gap-2 ${
-                          isOwned
-                            ? 'bg-[#1C170E] text-[#D4AF37] border border-[#D4AF37]/30 cursor-default'
-                            : canBuy && user.status !== 'Pending Verification'
-                            ? 'bg-[#D4AF37] hover:bg-[#8C6D23] text-black hover:brightness-110 active:scale-95'
-                            : 'bg-white/[0.03] text-gray-500 border border-white/[0.05] cursor-not-allowed'
+                          isOwned ? 'bg-[#1C170E] text-[#D4AF37] border border-[#D4AF37]/30 cursor-default'
+                          : canBuy && user.status !== 'Pending Verification' ? 'bg-[#D4AF37] hover:bg-[#8C6D23] text-black hover:brightness-110 active:scale-95'
+                          : 'bg-white/[0.03] text-gray-500 border border-white/[0.05] cursor-not-allowed'
                         }`}
                       >
-                        {isLoading ? (
-                          <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                        ) : isOwned ? (
-                          'Currently Active'
-                        ) : !canBuy ? (
-                          'Insufficient Balance'
-                        ) : user.status === 'Pending Verification' ? (
-                          'Verify deposit first'
-                        ) : (
-                          `Activate $${p.price} Plan`
-                        )}
+                        {isLoading ? <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                        : isOwned ? 'Currently Active'
+                        : !canBuy ? 'Insufficient Balance'
+                        : user.status === 'Pending Verification' ? 'Verify deposit first'
+                        : `Activate $${p.price} Plan`}
                       </button>
                     </div>
                   );
@@ -950,129 +916,70 @@ export default function Dashboard({ onNavigate, currentLanguage }: DashboardProp
         {/* ── FUNDING TAB ── */}
         {activeTab === 'funding' && (
           <div className="space-y-8 animate-fadeIn">
-            {/* Deposit Proof Form */}
             <div className="bg-[#111112] p-8 rounded-3xl border border-white/[0.04] space-y-6">
               <div>
-                <span className="text-[#C5A059] font-mono text-xs uppercase block mb-1">
-                  Capital Funding Portal
-                </span>
+                <span className="text-[#C5A059] font-mono text-xs uppercase block mb-1">Capital Funding Portal</span>
                 <h2 className="text-xl font-bold">Submit Deposit Proof</h2>
                 <p className="text-xs text-gray-400 mt-2 leading-relaxed max-w-2xl">
-                  Transfer USDT (TRC-20 / ERC-20) or BTC to our secure custodian wallet then
-                  submit the blockchain TX hash as proof. Our auditors approve within 1–2 hours.
+                  Transfer USDT (TRC-20 / ERC-20) or BTC to our secure custodian wallet then submit the blockchain TX hash as proof. Our auditors approve within 1–2 hours.
                 </p>
               </div>
 
               <div className="p-4 bg-[#0A0A0B] rounded-2xl border border-[#D4AF37]/15 space-y-2">
-                <span className="text-[9px] text-[#D4AF37] font-mono uppercase font-bold">
-                  USDT TRC-20 Deposit Address
-                </span>
+                <span className="text-[9px] text-[#D4AF37] font-mono uppercase font-bold">USDT TRC-20 Deposit Address</span>
                 <div className="flex items-center gap-3">
-                  <code className="text-sm text-white font-mono break-all">
-                    TQn9Y2khEsLJW1ChVWFMSMeRDow5KcbLSE
-                  </code>
+                  <code className="text-sm text-white font-mono break-all">TQn9Y2khEsLJW1ChVWFMSMeRDow5KcbLSE</code>
                   <button
-                    onClick={() => {
-                      navigator.clipboard.writeText('TQn9Y2khEsLJW1ChVWFMSMeRDow5KcbLSE');
-                      showToastMsg('success', 'Wallet address copied.');
-                    }}
+                    onClick={() => { navigator.clipboard.writeText('TQn9Y2khEsLJW1ChVWFMSMeRDow5KcbLSE'); showToastMsg('success', 'Wallet address copied.'); }}
                     className="shrink-0 p-2 bg-white/[0.04] hover:bg-[#D4AF37] hover:text-black rounded-lg transition"
                   >
                     <Copy className="w-4 h-4" />
                   </button>
                 </div>
-                <p className="text-[10px] text-gray-500 font-mono">
-                  Minimum deposit: $30. Only USDT TRC-20, ERC-20 accepted.
-                </p>
+                <p className="text-[10px] text-gray-500 font-mono">Minimum deposit: $30. Only USDT TRC-20, ERC-20 accepted.</p>
               </div>
 
               <form onSubmit={handleDepositSubmit} className="grid sm:grid-cols-2 gap-5">
                 <div>
-                  <label className="text-[9px] font-mono text-gray-500 uppercase block mb-1">
-                    Deposit Amount ($ USD)
-                  </label>
-                  <input
-                    type="number"
-                    required
-                    value={depositAmount}
-                    onChange={(e) => setDepositAmount(e.target.value)}
-                    className="w-full bg-[#1A1A1C] border border-white/[0.06] rounded-xl py-2.5 px-3 text-xs text-white focus:outline-none focus:border-[#D4AF37] transition"
-                  />
+                  <label className="text-[9px] font-mono text-gray-500 uppercase block mb-1">Deposit Amount ($ USD)</label>
+                  <input type="number" required value={depositAmount} onChange={(e) => setDepositAmount(e.target.value)} className="w-full bg-[#1A1A1C] border border-white/[0.06] rounded-xl py-2.5 px-3 text-xs text-white focus:outline-none focus:border-[#D4AF37] transition" />
                 </div>
                 <div>
-                  <label className="text-[9px] font-mono text-gray-500 uppercase block mb-1">
-                    Blockchain TX Hash (optional)
-                  </label>
-                  <input
-                    type="text"
-                    value={depositHash}
-                    onChange={(e) => setDepositHash(e.target.value)}
-                    placeholder="0x..."
-                    className="w-full bg-[#1A1A1C] border border-white/[0.06] rounded-xl py-2.5 px-3 text-xs text-white focus:outline-none focus:border-[#D4AF37] transition font-mono"
+                  <label className="text-[9px] font-mono text-gray-500 uppercase block mb-1">Blockchain TX Hash (optional)</label>
+                  <input type="text" value={depositHash} onChange={(e) => setDepositHash(e.target.value)} placeholder="0x..." className="w-full bg-[#1A1A1C] border border-white/[0.06] rounded-xl py-2.5 px-3 text-xs text-white focus:outline-none focus:border-[#D4AF37] transition font-mono" />
+                </div>
+                <div className="sm:col-span-2">
+                  <ImageUploadField
+                    label="Payment Screenshot (required)"
+                    bucket="deposits"
+                    onUploaded={(url) => setDepositProofImageUrl(url)}
                   />
                 </div>
                 <div className="sm:col-span-2">
-                  <label className="text-[9px] font-mono text-gray-500 uppercase block mb-1">
-                    Proof Screenshot URL (optional)
-                  </label>
-                  <input
-                    type="text"
-                    value={depositProofUrl}
-                    onChange={(e) => setDepositProofUrl(e.target.value)}
-                    placeholder="https://..."
-                    className="w-full bg-[#1A1A1C] border border-white/[0.06] rounded-xl py-2.5 px-3 text-xs text-white focus:outline-none focus:border-[#D4AF37] transition"
-                  />
-                </div>
-                <div className="sm:col-span-2">
-                  <button
-                    type="submit"
-                    disabled={actionLoading === 'deposit'}
-                    className="w-full py-3.5 rounded-xl bg-gradient-to-r from-[#D4AF37] to-[#8C6D23] hover:brightness-110 text-black font-bold text-xs uppercase tracking-widest transition flex items-center justify-center gap-2 disabled:opacity-60"
-                  >
-                    {actionLoading === 'deposit' ? (
-                      <RefreshCw className="w-4 h-4 animate-spin" />
-                    ) : (
-                      'Submit Deposit Proof'
-                    )}
+                  <button type="submit" disabled={actionLoading === 'deposit' || !depositProofImageUrl} className="w-full py-3.5 rounded-xl bg-gradient-to-r from-[#D4AF37] to-[#8C6D23] hover:brightness-110 text-black font-bold text-xs uppercase tracking-widest transition flex items-center justify-center gap-2 disabled:opacity-60">
+                    {actionLoading === 'deposit' ? <RefreshCw className="w-4 h-4 animate-spin" /> : 'Submit Deposit Proof'}
                   </button>
                 </div>
               </form>
             </div>
 
-            {/* Bank Account Form */}
             <div className="bg-[#111112] p-6 rounded-3xl border border-white/[0.04] space-y-5">
               <h3 className="text-base font-bold text-white">Link Bank Account for Withdrawals</h3>
-
               {bankAccounts.length > 0 && (
                 <div className="space-y-2">
                   {bankAccounts.map((b) => (
-                    <div
-                      key={b.id}
-                      className="flex items-center justify-between p-3 bg-[#0C0C0D] rounded-xl border border-white/[0.03]"
-                    >
+                    <div key={b.id} className="flex items-center justify-between p-3 bg-[#0C0C0D] rounded-xl border border-white/[0.03]">
                       <div>
                         <p className="text-xs font-bold text-white font-mono">{b.bankName}</p>
-                        <p className="text-[9px] text-gray-500 font-mono">
-                          {b.accountName} · {b.accountNumber}
-                          {b.isPreferred && (
-                            <span className="ml-2 text-[#D4AF37]">★ Preferred</span>
-                          )}
-                        </p>
+                        <p className="text-[9px] text-gray-500 font-mono">{b.accountName} · {b.accountNumber}{b.isPreferred && <span className="ml-2 text-[#D4AF37]">★ Preferred</span>}</p>
                       </div>
-                      <button
-                        onClick={async () => {
-                          await dbService.deleteBankAccount(b.id);
-                          await refreshData();
-                        }}
-                        className="text-gray-600 hover:text-red-400 transition"
-                      >
+                      <button onClick={async () => { await dbService.deleteBankAccount(b.id); await refreshData(); }} className="text-gray-600 hover:text-red-400 transition">
                         <X className="w-4 h-4" />
                       </button>
                     </div>
                   ))}
                 </div>
               )}
-
               <form onSubmit={handleAddBank} className="grid sm:grid-cols-2 gap-4">
                 {[
                   { label: 'Bank Name', val: bankName, setter: setBankName, ph: 'Barclays Bank PLC' },
@@ -1082,80 +989,34 @@ export default function Dashboard({ onNavigate, currentLanguage }: DashboardProp
                 ].map((f) => (
                   <div key={f.label}>
                     <label className="text-[9px] font-mono text-gray-500 uppercase">{f.label}</label>
-                    <input
-                      type="text"
-                      required
-                      value={f.val}
-                      onChange={(e) => f.setter(e.target.value)}
-                      placeholder={f.ph}
-                      className="w-full mt-1 bg-[#1A1A1C] border border-white/[0.06] rounded-lg py-2 px-3 text-xs text-white focus:outline-none focus:border-[#D4AF37] transition"
-                    />
+                    <input type="text" required value={f.val} onChange={(e) => f.setter(e.target.value)} placeholder={f.ph} className="w-full mt-1 bg-[#1A1A1C] border border-white/[0.06] rounded-lg py-2 px-3 text-xs text-white focus:outline-none focus:border-[#D4AF37] transition" />
                   </div>
                 ))}
-
                 <div className="sm:col-span-2 pt-2">
-                  <button
-                    type="submit"
-                    disabled={actionLoading === 'addbank'}
-                    className="w-full py-2.5 bg-white/[0.03] hover:bg-[#D4AF37] hover:text-black border border-white/[0.08] text-white rounded-lg text-xs font-mono uppercase tracking-wider transition flex items-center justify-center gap-2 disabled:opacity-60"
-                  >
-                    {actionLoading === 'addbank' ? (
-                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                    ) : (
-                      'Link Bank Account'
-                    )}
+                  <button type="submit" disabled={actionLoading === 'addbank'} className="w-full py-2.5 bg-white/[0.03] hover:bg-[#D4AF37] hover:text-black border border-white/[0.08] text-white rounded-lg text-xs font-mono uppercase tracking-wider transition flex items-center justify-center gap-2 disabled:opacity-60">
+                    {actionLoading === 'addbank' ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : 'Link Bank Account'}
                   </button>
                 </div>
               </form>
             </div>
 
-            {/* Withdrawal Form */}
             <div className="bg-[#111112] p-6 rounded-3xl border border-white/[0.04] space-y-4">
               <h3 className="text-base font-bold text-white">Initiate Secure Wire Transfer</h3>
-              <p className="text-xs text-gray-400">
-                Returns can be withdrawn once the plan's circular target has completed.
-              </p>
-
+              <p className="text-xs text-gray-400">Returns can be withdrawn once the plan's circular target has completed.</p>
               <form onSubmit={handleWithdrawAmount} className="space-y-4">
                 <div>
-                  <label className="text-[9px] font-mono text-gray-500 uppercase block mb-1">
-                    Linked Bank Account
-                  </label>
-                  <select
-                    value={withdrawBankId}
-                    onChange={(e) => setWithdrawBankId(e.target.value)}
-                    className="w-full bg-[#1A1A1C] border border-white/[0.06] rounded-xl py-2.5 px-3 text-xs text-white focus:outline-none focus:border-[#D4AF37] transition"
-                  >
+                  <label className="text-[9px] font-mono text-gray-500 uppercase block mb-1">Linked Bank Account</label>
+                  <select value={withdrawBankId} onChange={(e) => setWithdrawBankId(e.target.value)} className="w-full bg-[#1A1A1C] border border-white/[0.06] rounded-xl py-2.5 px-3 text-xs text-white focus:outline-none focus:border-[#D4AF37] transition">
                     <option value="">-- Select bank account --</option>
-                    {bankAccounts.map((b) => (
-                      <option key={b.id} value={b.id}>
-                        {b.bankName} ({b.accountNumber})
-                      </option>
-                    ))}
+                    {bankAccounts.map((b) => <option key={b.id} value={b.id}>{b.bankName} ({b.accountNumber})</option>)}
                   </select>
                 </div>
                 <div>
-                  <label className="text-[9px] font-mono text-gray-500 uppercase block mb-1">
-                    Withdrawal Amount ($)
-                  </label>
-                  <input
-                    type="number"
-                    required
-                    value={withdrawAmount}
-                    onChange={(e) => setWithdrawAmount(e.target.value)}
-                    className="w-full bg-[#1A1A1C] border border-white/[0.06] rounded-xl py-2.5 px-3.5 text-xs text-white focus:outline-none focus:border-[#D4AF37] transition"
-                  />
+                  <label className="text-[9px] font-mono text-gray-500 uppercase block mb-1">Withdrawal Amount ($)</label>
+                  <input type="number" required value={withdrawAmount} onChange={(e) => setWithdrawAmount(e.target.value)} className="w-full bg-[#1A1A1C] border border-white/[0.06] rounded-xl py-2.5 px-3.5 text-xs text-white focus:outline-none focus:border-[#D4AF37] transition" />
                 </div>
-                <button
-                  type="submit"
-                  disabled={actionLoading === 'withdraw'}
-                  className="w-full py-3 rounded-xl bg-orange-950/20 hover:bg-[#D4AF37] border border-[#D4AF37]/20 hover:text-black hover:border-[#D4AF37] text-[#D4AF37] font-bold text-xs uppercase tracking-widest transition flex items-center justify-center gap-2 disabled:opacity-60"
-                >
-                  {actionLoading === 'withdraw' ? (
-                    <RefreshCw className="w-4 h-4 animate-spin" />
-                  ) : (
-                    'Transmit Withdrawal'
-                  )}
+                <button type="submit" disabled={actionLoading === 'withdraw'} className="w-full py-3 rounded-xl bg-orange-950/20 hover:bg-[#D4AF37] border border-[#D4AF37]/20 hover:text-black hover:border-[#D4AF37] text-[#D4AF37] font-bold text-xs uppercase tracking-widest transition flex items-center justify-center gap-2 disabled:opacity-60">
+                  {actionLoading === 'withdraw' ? <RefreshCw className="w-4 h-4 animate-spin" /> : 'Transmit Withdrawal'}
                 </button>
               </form>
             </div>
@@ -1168,52 +1029,32 @@ export default function Dashboard({ onNavigate, currentLanguage }: DashboardProp
             <div className="bg-[#111112] p-6 rounded-3xl border border-white/[0.04]">
               <div className="grid lg:grid-cols-12 gap-8 items-center">
                 <div className="lg:col-span-7 space-y-4">
-                  <span className="text-[#C5A059] font-mono text-xs uppercase block">
-                    Affiliate Partner Hub
-                  </span>
+                  <span className="text-[#C5A059] font-mono text-xs uppercase block">Affiliate Partner Hub</span>
                   <h2 className="text-xl font-bold">Compounding Referral Compensation Pools</h2>
                   <p className="text-xs text-gray-400 leading-relaxed">
-                    Receive <strong>10% instant commission</strong> on all approved deposits
-                    introduced by your referral link. Share your unique code to watch
-                    multipliers stack dynamically.
+                    Receive <strong>10% instant commission</strong> on all approved deposits introduced by your referral link.
                   </p>
-
                   <div className="p-4 bg-[#0C0C0D] rounded-2xl border border-white/[0.05] inline-flex items-center gap-4">
                     <div>
-                      <span className="text-[9px] font-mono text-gray-500 uppercase">
-                        Your referral code
-                      </span>
-                      <p className="text-base font-bold text-[#D4AF37] font-mono tracking-wider mt-0.5">
-                        {user.referralCode}
-                      </p>
+                      <span className="text-[9px] font-mono text-gray-500 uppercase">Your referral code</span>
+                      <p className="text-base font-bold text-[#D4AF37] font-mono tracking-wider mt-0.5">{user.referralCode}</p>
                     </div>
                     <div className="h-8 w-[1px] bg-white/10" />
-                    <button
-                      id="copy-ref-link-btn"
-                      onClick={handleCopyReferral}
-                      className="px-4 py-2 bg-white/[0.04] text-[#D4AF37] hover:bg-[#D4AF37] hover:text-black font-semibold text-xs rounded-xl flex items-center gap-1.5 transition font-mono uppercase"
-                    >
+                    <button id="copy-ref-link-btn" onClick={handleCopyReferral} className="px-4 py-2 bg-white/[0.04] text-[#D4AF37] hover:bg-[#D4AF37] hover:text-black font-semibold text-xs rounded-xl flex items-center gap-1.5 transition font-mono uppercase">
                       {copiedLink ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
                       <span>{copiedLink ? 'Copied!' : 'Copy Link'}</span>
                     </button>
                   </div>
                 </div>
-
                 <div className="lg:col-span-5 bg-gradient-to-r from-[#17140B] to-[#121214] p-5 rounded-2xl border border-[#D4AF37]/20 flex justify-between items-center text-center">
                   <div className="flex-1">
                     <span className="text-2xl font-bold font-mono text-white">—</span>
-                    <p className="text-[10px] text-gray-500 uppercase font-mono mt-1">
-                      Referred Investors
-                    </p>
+                    <p className="text-[10px] text-gray-500 uppercase font-mono mt-1">Referred Investors</p>
                   </div>
                   <div className="h-10 w-[1px] bg-white/10" />
                   <div className="flex-1">
-                    <span className="text-2xl font-bold font-mono text-[#D4AF37]">
-                      ${user.referralEarningsAccumulated.toFixed(2)}
-                    </span>
-                    <p className="text-[10px] text-gray-500 uppercase font-mono mt-1">
-                      Total Team Bonus
-                    </p>
+                    <span className="text-2xl font-bold font-mono text-[#D4AF37]">${user.referralEarningsAccumulated.toFixed(2)}</span>
+                    <p className="text-[10px] text-gray-500 uppercase font-mono mt-1">Total Team Bonus</p>
                   </div>
                 </div>
               </div>
@@ -1227,100 +1068,60 @@ export default function Dashboard({ onNavigate, currentLanguage }: DashboardProp
             <div className="bg-[#111112] p-6 rounded-3xl border border-white/[0.04]">
               <div className="flex items-center justify-between border-b border-white/[0.03] pb-4 mb-6">
                 <div>
-                  <span className="text-[#C5A059] font-mono text-xs uppercase block">
-                    Task Incentivize Platform
-                  </span>
+                  <span className="text-[#C5A059] font-mono text-xs uppercase block">Task Incentivize Platform</span>
                   <h2 className="text-lg font-bold">Daily Promotional Assignments</h2>
                 </div>
-                <span className="text-[10px] font-mono uppercase bg-white/5 border border-white/10 px-3 py-1 text-gray-400 rounded-full">
-                  Updated Today
-                </span>
+                <span className="text-[10px] font-mono uppercase bg-white/5 border border-white/10 px-3 py-1 text-gray-400 rounded-full">Updated Today</span>
               </div>
-
               <div className="grid md:grid-cols-2 gap-6">
                 {[
-                  {
-                    id: 'task-checkin',
-                    title: 'Daily Platform Attendance Check-in',
-                    reward: 0.5,
-                    type: 'Every 24h — instant credit',
-                    desc: 'Click the check-in button once per day to verify your presence and earn $0.50 instantly credited to your wallet.',
-                  },
-                  {
-                    id: 'task-telegram',
-                    title: 'Join Official Telegram Channel',
-                    reward: 1.0,
-                    type: 'Manual admin review required',
-                    desc: 'Join the LeadsGlobal Telegram news feed. Submit your Telegram username as proof. Earns $1.00.',
-                  },
-                  {
-                    id: 'task-twitter',
-                    title: 'Share LeadsGlobal Certificate on X / Twitter',
-                    reward: 2.0,
-                    type: 'Manual admin review required',
-                    desc: 'Tweet a screenshot of your approved receipt or profile stats with #LeadsGlobal. Paste the tweet URL. Earns $2.00.',
-                  },
+                  { id: 'task-checkin', title: 'Daily Platform Attendance Check-in', reward: 0.5, type: 'Every 24h — instant credit', desc: 'Click the check-in button once per day to verify your presence and earn $0.50 instantly credited to your wallet.' },
+                  { id: 'task-telegram', title: 'Join Official Telegram Channel', reward: 1.0, type: 'Manual admin review required', desc: 'Join the LeadsGlobal Telegram news feed. Submit your Telegram username as proof. Earns $1.00.' },
+                  { id: 'task-twitter', title: 'Share LeadsGlobal Certificate on X / Twitter', reward: 2.0, type: 'Manual admin review required', desc: 'Tweet a screenshot of your approved receipt or profile stats with #LeadsGlobal. Paste the tweet URL. Earns $2.00.' },
                 ].map((tsk) => {
                   const log = taskLogs.find((l) => l.taskId === tsk.id);
                   const isPending = log?.status === 'pending';
                   const isApproved = log?.status === 'approved';
                   const isLoading = actionLoading === `task_${tsk.id}`;
-
                   return (
-                    <div
-                      key={tsk.id}
-                      className="p-5 bg-[#0C0C0D] rounded-2xl border border-white/[0.03] flex flex-col justify-between min-h-[210px]"
-                    >
+                    <div key={tsk.id} className="p-5 bg-[#0C0C0D] rounded-2xl border border-white/[0.03] flex flex-col justify-between min-h-[210px]">
                       <div>
                         <div className="flex justify-between items-start">
-                          <span className="text-[10px] text-gray-500 font-mono uppercase tracking-wider block">
-                            {tsk.type}
-                          </span>
-                          <span className="text-xs font-mono text-[#D4AF37] bg-[#1C170E] px-2.5 py-0.5 rounded border border-[#D4AF37]/20 font-bold">
-                            +${tsk.reward.toFixed(2)} USD
-                          </span>
+                          <span className="text-[10px] text-gray-500 font-mono uppercase tracking-wider block">{tsk.type}</span>
+                          <span className="text-xs font-mono text-[#D4AF37] bg-[#1C170E] px-2.5 py-0.5 rounded border border-[#D4AF37]/20 font-bold">+${tsk.reward.toFixed(2)} USD</span>
                         </div>
                         <h4 className="text-sm font-bold mt-2 text-white">{tsk.title}</h4>
                         <p className="text-[11px] text-gray-400 mt-2 leading-relaxed">{tsk.desc}</p>
                       </div>
-
-                      <div className="mt-4 pt-3 border-t border-white/[0.02] flex items-center justify-between">
-                        <span className="text-xs text-gray-500 font-mono">
-                          Status:{' '}
-                          <strong className="text-white">
-                            {log ? log.status.toUpperCase() : 'NOT STARTED'}
-                          </strong>
-                        </span>
-                        <button
-                          disabled={
-                            isPending ||
-                            isApproved ||
-                            user.status === 'Pending Verification' ||
-                            isLoading
-                          }
-                          onClick={() => handleTaskAction(tsk.id, tsk.title)}
-                          className={`px-4 py-2 font-mono text-[9px] uppercase tracking-wider rounded font-bold transition flex items-center gap-1.5 ${
-                            isApproved
-                              ? 'bg-emerald-950 text-emerald-400 border border-emerald-500/10 cursor-not-allowed'
-                              : isPending
-                              ? 'bg-gray-800 text-gray-400 cursor-not-allowed animate-pulse'
-                              : user.status === 'Pending Verification'
-                              ? 'bg-white/5 text-gray-500 border border-white/10 cursor-not-allowed'
+                      <div className="mt-4 pt-3 border-t border-white/[0.02] space-y-3">
+                        {tsk.id !== 'task-checkin' && !isApproved && !isPending && user.status !== 'Pending Verification' && (
+                          <ImageUploadField
+                            label="Upload Screenshot Proof"
+                            bucket="tasks"
+                            onUploaded={(url) => setTaskProofImageUrl(prev => ({ ...prev, [tsk.id]: url }))}
+                          />
+                        )}
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs text-gray-500 font-mono">Status: <strong className="text-white">{log ? log.status.toUpperCase() : 'NOT STARTED'}</strong></span>
+                          <button
+                            disabled={isPending || isApproved || user.status === 'Pending Verification' || isLoading || (tsk.id !== 'task-checkin' && !taskProofImageUrl[tsk.id])}
+                            onClick={() => handleTaskAction(tsk.id, tsk.title)}
+                            className={`px-4 py-2 font-mono text-[9px] uppercase tracking-wider rounded font-bold transition flex items-center gap-1.5 ${
+                              isApproved ? 'bg-emerald-950 text-emerald-400 border border-emerald-500/10 cursor-not-allowed'
+                              : isPending ? 'bg-gray-800 text-gray-400 cursor-not-allowed animate-pulse'
+                              : user.status === 'Pending Verification' ? 'bg-white/5 text-gray-500 border border-white/10 cursor-not-allowed'
+                              : (tsk.id !== 'task-checkin' && !taskProofImageUrl[tsk.id]) ? 'bg-white/5 text-gray-500 border border-white/10 cursor-not-allowed'
                               : 'bg-[#D4AF37] text-black hover:brightness-110 active:scale-95'
-                          }`}
-                        >
-                          {isLoading ? (
-                            <RefreshCw className="w-3 h-3 animate-spin" />
-                          ) : isApproved ? (
-                            'Completed'
-                          ) : isPending ? (
-                            'Under Review'
-                          ) : user.status === 'Pending Verification' ? (
-                            'Verify deposit first'
-                          ) : (
-                            'Complete Task'
-                          )}
-                        </button>
+                            }`}
+                          >
+                            {isLoading ? <RefreshCw className="w-3 h-3 animate-spin" />
+                            : isApproved ? 'Completed'
+                            : isPending ? 'Under Review'
+                            : user.status === 'Pending Verification' ? 'Verify deposit first'
+                            : (tsk.id !== 'task-checkin' && !taskProofImageUrl[tsk.id]) ? 'Upload proof first'
+                            : 'Complete Task'}
+                          </button>
+                        </div>
                       </div>
                     </div>
                   );
@@ -1338,65 +1139,29 @@ export default function Dashboard({ onNavigate, currentLanguage }: DashboardProp
                 <ShieldCheck className="w-6 h-6 text-[#D4AF37]" />
                 <div>
                   <h2 className="text-lg font-bold">KYC Identity Compliance Portal</h2>
-                  <p className="text-xs text-gray-400 mt-0.5">
-                    KYC approval required before bank withdrawals.
-                  </p>
+                  <p className="text-xs text-gray-400 mt-0.5">KYC approval required before bank withdrawals.</p>
                 </div>
               </div>
-
-              {/* Status */}
               <div className="grid sm:grid-cols-2 gap-4 bg-[#0C0C0D] p-4 rounded-2xl border border-white/[0.02]">
                 <div>
-                  <span className="text-[10px] text-gray-500 font-mono uppercase">
-                    KYC Status
-                  </span>
+                  <span className="text-[10px] text-gray-500 font-mono uppercase">KYC Status</span>
                   <div className="flex items-center gap-2 mt-1">
-                    <span
-                      className={`w-2 h-2 rounded-full ${
-                        user.kycStatus === 'Approved'
-                          ? 'bg-emerald-400'
-                          : user.kycStatus === 'Pending'
-                          ? 'bg-amber-400 animate-pulse'
-                          : user.kycStatus === 'Rejected'
-                          ? 'bg-red-400'
-                          : 'bg-gray-600'
-                      }`}
-                    />
-                    <span
-                      className={`text-sm font-bold font-mono ${
-                        user.kycStatus === 'Approved'
-                          ? 'text-emerald-400'
-                          : user.kycStatus === 'Pending'
-                          ? 'text-amber-400'
-                          : user.kycStatus === 'Rejected'
-                          ? 'text-red-400'
-                          : 'text-gray-400'
-                      }`}
-                    >
-                      {user.kycStatus}
-                    </span>
+                    <span className={`w-2 h-2 rounded-full ${user.kycStatus === 'Approved' ? 'bg-emerald-400' : user.kycStatus === 'Pending' ? 'bg-amber-400 animate-pulse' : user.kycStatus === 'Rejected' ? 'bg-red-400' : 'bg-gray-600'}`} />
+                    <span className={`text-sm font-bold font-mono ${user.kycStatus === 'Approved' ? 'text-emerald-400' : user.kycStatus === 'Pending' ? 'text-amber-400' : user.kycStatus === 'Rejected' ? 'text-red-400' : 'text-gray-400'}`}>{user.kycStatus}</span>
                   </div>
                 </div>
                 <div>
-                  <span className="text-[10px] text-gray-500 font-mono uppercase">
-                    Processing Fee
-                  </span>
-                  <p
-                    className={`text-sm font-bold font-mono mt-1 ${
-                      user.kyc?.hasPaidFee ? 'text-emerald-400' : 'text-amber-400'
-                    }`}
-                  >
+                  <span className="text-[10px] text-gray-500 font-mono uppercase">Processing Fee</span>
+                  <p className={`text-sm font-bold font-mono mt-1 ${user.kyc?.hasPaidFee ? 'text-emerald-400' : 'text-amber-400'}`}>
                     {user.kyc?.hasPaidFee ? '✓ Paid ($15)' : '⚠ Unpaid ($15)'}
                   </p>
                 </div>
               </div>
-
               {user.kycStatus === 'Rejected' && user.kyc?.rejectionReason && (
                 <div className="p-4 bg-red-950/30 border border-red-500/20 rounded-xl text-xs text-red-300">
                   <strong>Rejection Reason:</strong> {user.kyc.rejectionReason}
                 </div>
               )}
-
               <form onSubmit={handleKYCSubmit} className="space-y-4">
                 <div className="grid sm:grid-cols-2 gap-4">
                   {[
@@ -1404,112 +1169,45 @@ export default function Dashboard({ onNavigate, currentLanguage }: DashboardProp
                     { label: 'ID Number', val: kycIdNumber, setter: setKycIdNumber, ph: 'PA1234567' },
                   ].map((f) => (
                     <div key={f.label}>
-                      <label className="text-[9px] font-mono text-gray-500 uppercase block mb-1">
-                        {f.label}
-                      </label>
-                      <input
-                        type="text"
-                        required
-                        value={f.val}
-                        onChange={(e) => f.setter(e.target.value)}
-                        placeholder={f.ph}
-                        className="w-full bg-[#1A1A1C] border border-white/[0.06] rounded-xl py-2.5 px-3 text-xs text-white focus:outline-none focus:border-[#D4AF37] transition"
-                      />
+                      <label className="text-[9px] font-mono text-gray-500 uppercase block mb-1">{f.label}</label>
+                      <input type="text" required value={f.val} onChange={(e) => f.setter(e.target.value)} placeholder={f.ph} className="w-full bg-[#1A1A1C] border border-white/[0.06] rounded-xl py-2.5 px-3 text-xs text-white focus:outline-none focus:border-[#D4AF37] transition" />
                     </div>
                   ))}
                 </div>
-
                 <div>
-                  <label className="text-[9px] font-mono text-gray-500 uppercase block mb-1">
-                    ID Type
-                  </label>
-                  <select
-                    value={kycIdType}
-                    onChange={(e) => setKycIdType(e.target.value)}
-                    className="w-full bg-[#1A1A1C] border border-white/[0.06] rounded-xl py-2.5 px-3 text-xs text-white focus:outline-none focus:border-[#D4AF37] transition"
-                  >
-                    {['Passport', "Driver's License", 'National ID', 'Residence Permit'].map(
-                      (t) => (
-                        <option key={t} value={t}>
-                          {t}
-                        </option>
-                      )
-                    )}
+                  <label className="text-[9px] font-mono text-gray-500 uppercase block mb-1">ID Type</label>
+                  <select value={kycIdType} onChange={(e) => setKycIdType(e.target.value)} className="w-full bg-[#1A1A1C] border border-white/[0.06] rounded-xl py-2.5 px-3 text-xs text-white focus:outline-none focus:border-[#D4AF37] transition">
+                    {['Passport', "Driver's License", 'National ID', 'Residence Permit'].map((t) => <option key={t} value={t}>{t}</option>)}
                   </select>
                 </div>
-
-                <div>
-                  <label className="text-[9px] font-mono text-gray-500 uppercase block mb-1">
-                    Selfie with ID — Image URL
-                  </label>
-                  <input
-                    type="text"
-                    value={kycSelfieUrl}
-                    onChange={(e) => setKycSelfieUrl(e.target.value)}
-                    placeholder="https://your-host.com/selfie.jpg"
-                    className="w-full bg-[#1A1A1C] border border-white/[0.06] rounded-xl py-2.5 px-3 text-xs text-white focus:outline-none focus:border-[#D4AF37] transition"
-                  />
-                </div>
-
-                <button
-                  type="submit"
-                  disabled={
-                    user.kycStatus === 'Approved' ||
-                    user.kycStatus === 'Pending' ||
-                    actionLoading === 'kyc'
-                  }
-                  className="w-full py-3 rounded-xl bg-gradient-to-r from-[#D4AF37] to-[#8C6D23] hover:brightness-110 active:scale-95 text-black font-extrabold text-xs uppercase tracking-widest transition flex items-center justify-center gap-2 disabled:opacity-60"
-                >
-                  {actionLoading === 'kyc' ? (
-                    <RefreshCw className="w-4 h-4 animate-spin" />
-                  ) : user.kycStatus === 'Approved' ? (
-                    'Compliance Certified ✓'
-                  ) : user.kycStatus === 'Pending' ? (
-                    'Awaiting Audit Review…'
-                  ) : (
-                    'Submit KYC Documents'
-                  )}
+                <ImageUploadField
+                  label="Selfie Holding ID Document (required)"
+                  bucket="kyc"
+                  onUploaded={(url) => setKycSelfieImageUrl(url)}
+                />
+                <button type="submit" disabled={user.kycStatus === 'Approved' || user.kycStatus === 'Pending' || actionLoading === 'kyc'} className="w-full py-3 rounded-xl bg-gradient-to-r from-[#D4AF37] to-[#8C6D23] hover:brightness-110 active:scale-95 text-black font-extrabold text-xs uppercase tracking-widest transition flex items-center justify-center gap-2 disabled:opacity-60">
+                  {actionLoading === 'kyc' ? <RefreshCw className="w-4 h-4 animate-spin" /> : user.kycStatus === 'Approved' ? 'Compliance Certified ✓' : user.kycStatus === 'Pending' ? 'Awaiting Audit Review…' : 'Submit KYC Documents'}
                 </button>
               </form>
             </div>
 
-            {/* KYC Fee Panel */}
             <div className="lg:col-span-4 bg-[#111112] p-6 rounded-3xl border border-white/[0.04] space-y-4">
               <h3 className="text-base font-bold text-white">Security Validation Fee</h3>
-              <p className="text-xs text-gray-400 leading-relaxed">
-                A one-time $15 processing fee is charged to validate passport authenticity and
-                comply with AML regulations. This permanently unlocks wire transfer capabilities.
-              </p>
-
+              <p className="text-xs text-gray-400 leading-relaxed">A one-time $15 processing fee is charged to validate passport authenticity and comply with AML regulations. This permanently unlocks wire transfer capabilities.</p>
               <div className="bg-[#0C0C0D] p-4 rounded-2xl border border-[#D4AF37]/15">
-                <span className="text-[9px] font-mono text-[#D4AF37] uppercase">
-                  Secure Audit Fee
-                </span>
-                <p className="text-3xl font-bold text-white font-mono mt-1">
-                  $15.00 <span className="text-xs text-gray-500">USD</span>
-                </p>
+                <span className="text-[9px] font-mono text-[#D4AF37] uppercase">Secure Audit Fee</span>
+                <p className="text-3xl font-bold text-white font-mono mt-1">$15.00 <span className="text-xs text-gray-500">USD</span></p>
               </div>
-
               <button
                 disabled={user.kyc?.hasPaidFee || user.walletBalance < 15 || actionLoading === 'kycfee'}
                 onClick={handlePayKYCFee}
                 className={`w-full py-3 rounded-xl font-mono text-xs uppercase tracking-wider font-extrabold transition flex items-center justify-center gap-2 ${
-                  user.kyc?.hasPaidFee
-                    ? 'bg-emerald-950/40 text-emerald-400 border border-emerald-500/20 cursor-not-allowed'
-                    : user.walletBalance >= 15
-                    ? 'bg-[#D4AF37] text-black hover:brightness-110 active:scale-95'
-                    : 'bg-white/[0.02] text-gray-500 border border-white/[0.05] cursor-not-allowed'
+                  user.kyc?.hasPaidFee ? 'bg-emerald-950/40 text-emerald-400 border border-emerald-500/20 cursor-not-allowed'
+                  : user.walletBalance >= 15 ? 'bg-[#D4AF37] text-black hover:brightness-110 active:scale-95'
+                  : 'bg-white/[0.02] text-gray-500 border border-white/[0.05] cursor-not-allowed'
                 }`}
               >
-                {actionLoading === 'kycfee' ? (
-                  <RefreshCw className="w-4 h-4 animate-spin" />
-                ) : user.kyc?.hasPaidFee ? (
-                  'Fee Verified Paid ✓'
-                ) : user.walletBalance >= 15 ? (
-                  'Authorize $15 Payment'
-                ) : (
-                  'Insufficient Balance'
-                )}
+                {actionLoading === 'kycfee' ? <RefreshCw className="w-4 h-4 animate-spin" /> : user.kyc?.hasPaidFee ? 'Fee Verified Paid ✓' : user.walletBalance >= 15 ? 'Authorize $15 Payment' : 'Insufficient Balance'}
               </button>
             </div>
           </div>
@@ -1518,82 +1216,46 @@ export default function Dashboard({ onNavigate, currentLanguage }: DashboardProp
         {/* ── SUPPORT TAB ── */}
         {activeTab === 'support' && (
           <div className="grid lg:grid-cols-12 gap-8 animate-fadeIn">
-            {/* New Ticket */}
             <div className="lg:col-span-5 bg-[#111112] p-6 rounded-3xl border border-white/[0.04] space-y-6">
               <div>
-                <span className="text-[#C5A059] font-mono text-xs uppercase block">
-                  Client Care Service Desk
-                </span>
+                <span className="text-[#C5A059] font-mono text-xs uppercase block">Client Care Service Desk</span>
                 <h3 className="text-base font-bold text-white">Create Support Ticket</h3>
                 <p className="text-xs text-gray-400">24/7/365 customer relations.</p>
               </div>
-
               <form onSubmit={handleOpenTicketSubmit} className="space-y-4">
                 <div>
-                  <label className="text-[9.5px] font-mono text-gray-500 uppercase block mb-1.5">
-                    Subject
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    value={ticketSubject}
-                    onChange={(e) => setTicketSubject(e.target.value)}
-                    placeholder="Inquiry or Transaction Delay"
-                    className="w-full bg-[#1A1A1C] border border-white/[0.06] rounded-xl py-2.5 px-3 text-xs text-white focus:outline-none focus:border-[#D4AF37] transition"
-                  />
+                  <label className="text-[9.5px] font-mono text-gray-500 uppercase block mb-1.5">Subject</label>
+                  <input type="text" required value={ticketSubject} onChange={(e) => setTicketSubject(e.target.value)} placeholder="Inquiry or Transaction Delay" className="w-full bg-[#1A1A1C] border border-white/[0.06] rounded-xl py-2.5 px-3 text-xs text-white focus:outline-none focus:border-[#D4AF37] transition" />
                 </div>
-
                 <div>
-                  <label className="text-[9.5px] font-mono text-gray-500 uppercase block mb-1.5">
-                    Category
-                  </label>
-                  <select
-                    value={ticketCategory}
-                    onChange={(e) => setTicketCategory(e.target.value)}
-                    className="w-full bg-[#1A1A1C] border border-white/[0.06] rounded-xl py-2.5 px-3 text-xs text-white focus:outline-none focus:border-[#D4AF37] transition"
-                  >
+                  <label className="text-[9.5px] font-mono text-gray-500 uppercase block mb-1.5">Category</label>
+                  <select value={ticketCategory} onChange={(e) => setTicketCategory(e.target.value)} className="w-full bg-[#1A1A1C] border border-white/[0.06] rounded-xl py-2.5 px-3 text-xs text-white focus:outline-none focus:border-[#D4AF37] transition">
                     <option value="Finance">Finance / Deposit Verification</option>
                     <option value="Technical Support">Technical Issues / Account Unlock</option>
                     <option value="Compliance">KYC Compliance</option>
                     <option value="Partner Matching">Referral Commissions</option>
                   </select>
                 </div>
-
                 <div>
-                  <label className="text-[9.5px] font-mono text-gray-500 uppercase block mb-1.5 font-bold">
-                    Message
-                  </label>
-                  <textarea
-                    required
-                    rows={4}
-                    value={ticketMessage}
-                    onChange={(e) => setTicketMessage(e.target.value)}
-                    placeholder="Provide specific details about your issue..."
-                    className="w-full bg-[#1A1A1C] border border-white/[0.06] rounded-xl py-3 px-3.5 text-xs text-white focus:outline-none focus:border-[#D4AF37] transition"
-                  />
+                  <label className="text-[9.5px] font-mono text-gray-500 uppercase block mb-1.5 font-bold">Message</label>
+                  <textarea required rows={4} value={ticketMessage} onChange={(e) => setTicketMessage(e.target.value)} placeholder="Provide specific details about your issue..." className="w-full bg-[#1A1A1C] border border-white/[0.06] rounded-xl py-3 px-3.5 text-xs text-white focus:outline-none focus:border-[#D4AF37] transition" />
                 </div>
-
-                <button
-                  type="submit"
-                  disabled={actionLoading === 'ticket'}
-                  className="w-full py-3 rounded-xl bg-gradient-to-r from-[#D4AF37] to-[#8C6D23] font-bold text-xs uppercase tracking-widest text-black shadow-lg flex items-center justify-center gap-2 disabled:opacity-60"
-                >
-                  {actionLoading === 'ticket' ? (
-                    <RefreshCw className="w-4 h-4 animate-spin" />
-                  ) : (
-                    'Submit Support Ticket'
-                  )}
+                <ImageUploadField
+                  label="Attach Screenshot (optional)"
+                  bucket="support"
+                  onUploaded={(url) => setTicketImageUrl(url)}
+                />
+                <button type="submit" disabled={actionLoading === 'ticket'} className="w-full py-3 rounded-xl bg-gradient-to-r from-[#D4AF37] to-[#8C6D23] font-bold text-xs uppercase tracking-widest text-black shadow-lg flex items-center justify-center gap-2 disabled:opacity-60">
+                  {actionLoading === 'ticket' ? <RefreshCw className="w-4 h-4 animate-spin" /> : 'Submit Support Ticket'}
                 </button>
               </form>
             </div>
 
-            {/* Ticket Threads */}
             <div className="lg:col-span-7 bg-[#111112] p-6 rounded-3xl border border-white/[0.04] space-y-6">
               <div>
                 <h3 className="text-base font-bold">My Support Tickets ({tickets.length})</h3>
                 <p className="text-xs text-gray-400">Select a ticket to view the thread.</p>
               </div>
-
               {tickets.length === 0 ? (
                 <div className="p-12 text-center text-gray-500 rounded-2xl bg-[#0A0A0B]/60">
                   <MessageSquare className="w-8 h-8 mx-auto opacity-25" />
@@ -1601,102 +1263,55 @@ export default function Dashboard({ onNavigate, currentLanguage }: DashboardProp
                 </div>
               ) : (
                 <div className="grid sm:grid-cols-12 gap-4 h-[420px]">
-                  {/* Ticket List */}
                   <div className="sm:col-span-5 space-y-2.5 overflow-y-auto max-h-[400px]">
                     {tickets.map((tck) => (
-                      <button
-                        key={tck.id}
-                        onClick={() => setSelectedTicketId(tck.id)}
-                        className={`w-full p-3 text-left rounded-xl border transition flex flex-col ${
-                          selectedTicketId === tck.id
-                            ? 'bg-[#1C170E] border-[#D4AF37]'
-                            : 'bg-[#0E0E0F] border-white/[0.04] hover:bg-white/[0.01]'
-                        }`}
-                      >
+                      <button key={tck.id} onClick={() => setSelectedTicketId(tck.id)} className={`w-full p-3 text-left rounded-xl border transition flex flex-col ${selectedTicketId === tck.id ? 'bg-[#1C170E] border-[#D4AF37]' : 'bg-[#0E0E0F] border-white/[0.04] hover:bg-white/[0.01]'}`}>
                         <div className="flex justify-between items-center w-full">
                           <span className="text-[9.5px] font-mono text-gray-500">{tck.id}</span>
-                          <span
-                            className={`px-1.5 py-0.5 rounded text-[8px] font-mono uppercase ${
-                              tck.status === 'open'
-                                ? 'bg-[#D4AF37]/15 text-[#D4AF37]'
-                                : 'bg-green-950 text-green-400'
-                            }`}
-                          >
-                            {tck.status}
-                          </span>
+                          <span className={`px-1.5 py-0.5 rounded text-[8px] font-mono uppercase ${tck.status === 'open' ? 'bg-[#D4AF37]/15 text-[#D4AF37]' : 'bg-green-950 text-green-400'}`}>{tck.status}</span>
                         </div>
-                        <h4 className="text-xs font-bold text-white mt-1 line-clamp-1">
-                          {tck.subject}
-                        </h4>
-                        <span className="text-[9px] text-gray-500 font-mono mt-2">
-                          {tck.category}
-                        </span>
+                        <h4 className="text-xs font-bold text-white mt-1 line-clamp-1">{tck.subject}</h4>
+                        <span className="text-[9px] text-gray-500 font-mono mt-2">{tck.category}</span>
                       </button>
                     ))}
                   </div>
-
-                  {/* Chat Thread */}
                   <div className="sm:col-span-7 bg-[#0C0C0D] p-4 rounded-2xl border border-white/[0.03] flex flex-col justify-between h-[400px]">
-                    {selectedTicketId ? (
-                      (() => {
-                        const activeTicket = tickets.find((t) => t.id === selectedTicketId);
-                        if (!activeTicket) return null;
-                        return (
-                          <div className="flex flex-col justify-between h-full">
-                            <div className="border-b border-white/[0.03] pb-2 mb-3">
-                              <h4 className="text-xs font-bold text-white">{activeTicket.subject}</h4>
-                              <span className="text-[9px] text-gray-400 font-mono block mt-0.5">
-                                {activeTicket.category}
-                              </span>
-                            </div>
-
-                            <div className="flex-1 space-y-3.5 overflow-y-auto max-h-[250px] pr-1.5">
-                              {activeTicket.messages.map((msg, mIdx) => (
-                                <div
-                                  key={mIdx}
-                                  className={`max-w-[85%] p-2.5 rounded-xl text-xs leading-relaxed ${
-                                    msg.sender === 'user'
-                                      ? 'bg-[#1C170E] border border-[#D4AF37]/20 text-white ml-auto'
-                                      : 'bg-white/[0.05] text-gray-200 mr-auto'
-                                  }`}
-                                >
-                                  <p>{msg.message}</p>
-                                  <span className="block text-[8px] text-gray-500 mt-1 text-right font-mono">
-                                    {msg.sender === 'user' ? 'Investor' : 'Support'} &bull;{' '}
-                                    {new Date(msg.timestamp).toLocaleTimeString([], {
-                                      hour: '2-digit',
-                                      minute: '2-digit',
-                                    })}
-                                  </span>
-                                </div>
-                              ))}
-                            </div>
-
-                            <form onSubmit={handleTicketReply} className="mt-3 flex gap-2">
-                              <input
-                                type="text"
-                                required
-                                value={ticketReplyText}
-                                onChange={(e) => setTicketReplyText(e.target.value)}
-                                placeholder="Type your reply..."
-                                className="flex-1 bg-[#1A1A1C] border border-white/[0.06] rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-[#D4AF37] transition"
-                              />
-                              <button
-                                type="submit"
-                                disabled={actionLoading === 'reply'}
-                                className="bg-[#D4AF37] hover:bg-[#8C6D23] text-black px-3.5 rounded-xl transition"
-                              >
-                                {actionLoading === 'reply' ? (
-                                  <RefreshCw className="w-4 h-4 animate-spin" />
-                                ) : (
-                                  <Send className="w-4 h-4" />
+                    {selectedTicketId ? (() => {
+                      const activeTicket = tickets.find((t) => t.id === selectedTicketId);
+                      if (!activeTicket) return null;
+                      return (
+                        <div className="flex flex-col justify-between h-full">
+                          <div className="border-b border-white/[0.03] pb-2 mb-3">
+                            <h4 className="text-xs font-bold text-white">{activeTicket.subject}</h4>
+                            <span className="text-[9px] text-gray-400 font-mono block mt-0.5">{activeTicket.category}</span>
+                          </div>
+                          <div className="flex-1 space-y-3.5 overflow-y-auto max-h-[200px] pr-1.5">
+                            {activeTicket.messages.map((msg, mIdx) => (
+                              <div key={mIdx} className={`max-w-[85%] p-2.5 rounded-xl text-xs leading-relaxed ${msg.sender === 'user' ? 'bg-[#1C170E] border border-[#D4AF37]/20 text-white ml-auto' : 'bg-white/[0.05] text-gray-200 mr-auto'}`}>
+                                <p>{msg.message}</p>
+                                {msg.imageUrl && (
+                                  <a href={msg.imageUrl} target="_blank" rel="noopener noreferrer">
+                                    <img src={msg.imageUrl} alt="attachment" className="mt-2 w-full max-h-28 object-cover rounded-lg border border-white/10 cursor-pointer hover:opacity-80 transition" />
+                                  </a>
                                 )}
+                                <span className="block text-[8px] text-gray-500 mt-1 text-right font-mono">
+                                  {msg.sender === 'user' ? 'Investor' : 'Support'} &bull; {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                          <div className="mt-2 space-y-2">
+                            <ImageUploadField label="Attach image (optional)" bucket="support" onUploaded={(url) => setTicketReplyImageUrl(url)} />
+                            <form onSubmit={handleTicketReply} className="flex gap-2">
+                              <input type="text" required value={ticketReplyText} onChange={(e) => setTicketReplyText(e.target.value)} placeholder="Type your reply..." className="flex-1 bg-[#1A1A1C] border border-white/[0.06] rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-[#D4AF37] transition" />
+                              <button type="submit" disabled={actionLoading === 'reply'} className="bg-[#D4AF37] hover:bg-[#8C6D23] text-black px-3.5 rounded-xl transition">
+                                {actionLoading === 'reply' ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
                               </button>
                             </form>
                           </div>
-                        );
-                      })()
-                    ) : (
+                        </div>
+                      );
+                    })() : (
                       <div className="flex flex-col items-center justify-center h-full text-center text-gray-500 font-mono text-xs">
                         <MessageSquare className="w-8 h-8 opacity-25 mb-2" />
                         <span>Select a ticket to open the thread.</span>
@@ -1714,33 +1329,20 @@ export default function Dashboard({ onNavigate, currentLanguage }: DashboardProp
       {viewingReceipt && (
         <div className="fixed inset-0 z-50 overflow-y-auto bg-black/85 flex items-center justify-center p-4">
           <div className="bg-[#121214] border border-[#D4AF37]/30 max-w-2xl w-full rounded-3xl p-8 relative shadow-2xl space-y-6">
-            <button
-              onClick={() => setViewingReceipt(null)}
-              className="absolute top-6 right-6 text-gray-500 hover:text-white transition"
-            >
+            <button onClick={() => setViewingReceipt(null)} className="absolute top-6 right-6 text-gray-500 hover:text-white transition">
               <X className="w-5 h-5" />
             </button>
-
             <div id="receipt-invoice-printable" className="p-6 bg-white text-black rounded-2xl text-xs space-y-6 font-sans">
               <div className="flex justify-between items-start border-b border-gray-200 pb-5">
                 <div>
-                  <h2 className="text-xl font-extrabold tracking-widest text-[#8C6D23]">
-                    LEADSGLOBAL
-                  </h2>
-                  <p className="text-[10px] text-gray-400 font-mono font-bold">
-                    Growing Capital, Building Future
-                  </p>
+                  <h2 className="text-xl font-extrabold tracking-widest text-[#8C6D23]">LEADSGLOBAL</h2>
+                  <p className="text-[10px] text-gray-400 font-mono font-bold">Growing Capital, Building Future</p>
                 </div>
                 <div className="text-right">
-                  <span className="inline-block bg-[#8C6D23]/10 text-[#8C6D23] font-bold font-mono px-3 py-1 rounded text-[10px] uppercase">
-                    OFFICIAL LEDGER INVOICE
-                  </span>
-                  <p className="text-[10px] text-gray-400 font-mono mt-1.5">
-                    {new Date(viewingReceipt.date).toUTCString()}
-                  </p>
+                  <span className="inline-block bg-[#8C6D23]/10 text-[#8C6D23] font-bold font-mono px-3 py-1 rounded text-[10px] uppercase">OFFICIAL LEDGER INVOICE</span>
+                  <p className="text-[10px] text-gray-400 font-mono mt-1.5">{new Date(viewingReceipt.date).toUTCString()}</p>
                 </div>
               </div>
-
               <div className="grid grid-cols-2 gap-4 text-gray-600 leading-relaxed pt-2">
                 <div>
                   <h4 className="text-[10px] uppercase font-mono text-gray-400">FROM:</h4>
@@ -1751,12 +1353,9 @@ export default function Dashboard({ onNavigate, currentLanguage }: DashboardProp
                 <div>
                   <h4 className="text-[10px] uppercase font-mono text-gray-400">TO:</h4>
                   <p className="font-bold text-black">{viewingReceipt.userEmail}</p>
-                  <p>
-                    Investor ID: <code className="font-mono text-black">{viewingReceipt.userId}</code>
-                  </p>
+                  <p>Investor ID: <code className="font-mono text-black">{viewingReceipt.userId}</code></p>
                 </div>
               </div>
-
               <div className="bg-gray-50 p-4 rounded-xl border border-gray-200 space-y-3 font-mono text-[11px]">
                 {[
                   ['Receipt Serial', viewingReceipt.receiptId],
@@ -1770,30 +1369,19 @@ export default function Dashboard({ onNavigate, currentLanguage }: DashboardProp
                 ))}
                 <div className="flex justify-between items-baseline pt-1">
                   <span className="font-sans text-sm font-bold text-gray-700">Total Amount:</span>
-                  <span className="text-xl font-extrabold text-[#8C6D23]">
-                    ${Math.abs(viewingReceipt.amount).toFixed(2)} USD
-                  </span>
+                  <span className="text-xl font-extrabold text-[#8C6D23]">${Math.abs(viewingReceipt.amount).toFixed(2)} USD</span>
                 </div>
               </div>
-
               <div className="text-[10px] text-gray-500 font-mono tracking-wide leading-relaxed border-t border-gray-200 pt-4 text-center">
-                Validated status:{' '}
-                <strong className="text-emerald-700">{viewingReceipt.status.toUpperCase()}</strong>
+                Validated status: <strong className="text-emerald-700">{viewingReceipt.status.toUpperCase()}</strong>
               </div>
             </div>
-
             <div className="flex gap-4">
-              <button
-                onClick={handlePrintReceipt}
-                className="flex-1 py-3 px-4 bg-white hover:bg-gray-100 text-black font-bold text-xs uppercase tracking-wider rounded-xl transition flex items-center justify-center gap-2"
-              >
+              <button onClick={handlePrintReceipt} className="flex-1 py-3 px-4 bg-white hover:bg-gray-100 text-black font-bold text-xs uppercase tracking-wider rounded-xl transition flex items-center justify-center gap-2">
                 <Download className="w-4 h-4" />
                 <span>Download / Print</span>
               </button>
-              <button
-                onClick={() => setViewingReceipt(null)}
-                className="flex-1 py-3 px-4 bg-white/[0.04] text-gray-400 hover:text-white font-bold font-mono text-xs uppercase tracking-wider rounded-xl transition"
-              >
+              <button onClick={() => setViewingReceipt(null)} className="flex-1 py-3 px-4 bg-white/[0.04] text-gray-400 hover:text-white font-bold font-mono text-xs uppercase tracking-wider rounded-xl transition">
                 Close
               </button>
             </div>
