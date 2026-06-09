@@ -655,8 +655,9 @@ export default function Home({ onNavigate, currentLanguage, onLanguageChange }: 
             <ul className="space-y-2 text-gray-400">
               <li>Live Chat Ticket Center & Help</li>
               <li>Compliance ID Verification team</li>
-              <li>Corporate email: compliance@leadsglobal.com</li>
-              <li>WhatsApp Integration Help desk</li>
+              <li><b>Corporate email:</b> support@leadglobal.online</li>
+              <li><b>Telegram:</b> https://t.me/leadglobalonline Integration Help desk</li>
+              <li><b>Telegram:</b> Integration Help desk</li>
             </ul>
           </div>
 
