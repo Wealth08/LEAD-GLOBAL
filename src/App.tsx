@@ -10,10 +10,12 @@ import Home from './components/Home';
 import Auth from './components/Auth';
 import Dashboard from './components/Dashboard';
 import AdminPanel from './components/AdminPanel';
+import PrivacyPolicy from './components/PrivacyPolicy';
+import TermsOfService from './components/TermsOfService';
 import { Language } from './types';
 import { supabase, dbService } from './supabaseMock';
 
-type AppView = 'home' | 'auth' | 'dashboard' | 'admin';
+type AppView = 'home' | 'auth' | 'dashboard' | 'admin' | 'privacy' | 'terms';
 
 // ─── ADMIN CREDENTIALS ────────────────────────────────────────────────────────
 const ADMIN_USERNAME = 'leadsglobal_admin';
@@ -323,6 +325,14 @@ export default function App() {
         <AdminPanel
           onNavigate={handleNavigate}
         />
+      )}
+
+      {currentView === 'privacy' && (
+        <PrivacyPolicy onNavigate={handleNavigate} />
+      )}
+
+      {currentView === 'terms' && (
+        <TermsOfService onNavigate={handleNavigate} />
       )}
     </div>
   );
