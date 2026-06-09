@@ -35,6 +35,44 @@ const COUNTRIES = [
   { name: 'Netherlands', code: '+31' },
 ];
 
+// ── PasswordInput defined OUTSIDE Auth to prevent remount on every keystroke ──
+interface PasswordInputProps {
+  value: string;
+  onChange: (v: string) => void;
+  placeholder: string;
+  show: boolean;
+  onToggle: () => void;
+}
+
+function PasswordInput({ value, onChange, placeholder, show, onToggle }: PasswordInputProps) {
+  return (
+    <div className="relative">
+      <input
+        type={show ? 'text' : 'password'}
+        required
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        className="w-full bg-[#1A1A1C] border border-white/[0.06] rounded-xl py-3 pl-11 pr-10 text-xs font-mono text-white placeholder-gray-600 focus:outline-none focus:border-[#D4AF37] transition"
+      />
+      <span className="absolute left-3.5 top-3.5 text-gray-500 pointer-events-none">
+        <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 10.5V7a4.5 4.5 0 00-9 0v3.5M5 10.5h14a1 1 0 011 1v8a1 1 0 01-1 1H5a1 1 0 01-1-1v-8a1 1 0 011-1z" />
+        </svg>
+      </span>
+      <button
+        type="button"
+        onClick={onToggle}
+        className="absolute right-3.5 top-3.5 text-gray-500 hover:text-gray-300 transition"
+      >
+        {show ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+      </button>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 export default function Auth({
   onNavigate,
   currentLanguage,
@@ -43,7 +81,6 @@ export default function Auth({
 }: AuthProps) {
   const [mode, setMode] = useState<'login' | 'signup' | 'forgot'>(initialMode);
 
-  // Shared fields
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -56,7 +93,6 @@ export default function Auth({
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(null);
   const [isLoading, setIsLoading] = useState(false);
 
-  const t = (key: string) => TRANSLATIONS[currentLanguage]?.[key] || TRANSLATIONS['en'][key] || key;
   const isRTL = currentLanguage === 'ar';
 
   const resetFields = () => {
@@ -68,7 +104,16 @@ export default function Auth({
     setFeedback(null);
   };
 
-  // ── Login ─────────────────────────────────────────────────────────────────
+  const inputClass =
+    'w-full bg-[#1A1A1C] border border-white/[0.06] rounded-xl py-3 pl-11 pr-4 text-xs font-mono text-white placeholder-gray-600 focus:outline-none focus:border-[#D4AF37] transition';
+
+  const feedbackColors = {
+    success: 'bg-[#1C1A12] border border-[#D4AF37]/30 text-[#D4AF37]',
+    error:   'bg-[#1A0F0F] border border-red-500/30 text-red-400',
+    info:    'bg-[#0F1A1C] border border-blue-500/30 text-blue-400',
+  };
+
+  // ── Login ──────────────────────────────────────────────────────────────────
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!email || !password) {
@@ -77,7 +122,6 @@ export default function Auth({
     }
     setIsLoading(true);
     setFeedback(null);
-
     try {
       const res = await dbService.login(email, password);
       if (res.success) {
@@ -92,7 +136,7 @@ export default function Auth({
     }
   };
 
-  // ── Signup ────────────────────────────────────────────────────────────────
+  // ── Signup ─────────────────────────────────────────────────────────────────
   const handleSignup = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!email || !password) {
@@ -109,24 +153,10 @@ export default function Auth({
     }
     setIsLoading(true);
     setFeedback(null);
-
     try {
-      const res = await dbService.signup(
-        email,
-        password,
-        phone,
-        country,
-        referralCode || undefined
-      );
-
+      const res = await dbService.signup(email, password, phone, country, referralCode || undefined);
       if (res.success) {
-        // After signup with Supabase, user must verify email.
-        // Show confirmation message — do NOT auto-navigate to dashboard.
-        setFeedback({
-          type: 'success',
-          text: res.message,
-        });
-        // Switch to login mode after a moment so they can sign in once verified
+        setFeedback({ type: 'success', text: res.message });
         setTimeout(() => setMode('login'), 4000);
       } else {
         setFeedback({ type: 'error', text: res.message });
@@ -138,7 +168,7 @@ export default function Auth({
     }
   };
 
-  // ── Forgot Password ───────────────────────────────────────────────────────
+  // ── Forgot Password ────────────────────────────────────────────────────────
   const handleForgotPassword = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!email) {
@@ -147,65 +177,14 @@ export default function Auth({
     }
     setIsLoading(true);
     setFeedback(null);
-
     try {
       const res = await dbService.sendPasswordReset(email);
-      setFeedback({
-        type: res.success ? 'success' : 'error',
-        text: res.message,
-      });
+      setFeedback({ type: res.success ? 'success' : 'error', text: res.message });
     } catch (err: any) {
       setFeedback({ type: 'error', text: err.message || 'An unexpected error occurred.' });
     } finally {
       setIsLoading(false);
     }
-  };
-
-  // ── Shared styles ─────────────────────────────────────────────────────────
-  const inputClass =
-    'w-full bg-[#1A1A1C] border border-white/[0.06] rounded-xl py-3 pl-11 pr-4 text-xs font-mono text-white placeholder-gray-600 focus:outline-none focus:border-[#D4AF37] transition';
-
-  const PasswordInput = ({
-    value,
-    onChange,
-    placeholder,
-    show,
-    onToggle,
-  }: {
-    value: string;
-    onChange: (v: string) => void;
-    placeholder: string;
-    show: boolean;
-    onToggle: () => void;
-  }) => (
-    <div className="relative">
-      <input
-        type={show ? 'text' : 'password'}
-        required
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder={placeholder}
-        className="w-full bg-[#1A1A1C] border border-white/[0.06] rounded-xl py-3 pl-11 pr-10 text-xs font-mono text-white placeholder-gray-600 focus:outline-none focus:border-[#D4AF37] transition"
-      />
-      <span className="absolute left-3.5 top-3.5 text-gray-500">
-        <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 10.5V7a4.5 4.5 0 00-9 0v3.5M5 10.5h14a1 1 0 011 1v8a1 1 0 01-1 1H5a1 1 0 01-1-1v-8a1 1 0 011-1z" />
-        </svg>
-      </span>
-      <button
-        type="button"
-        onClick={onToggle}
-        className="absolute right-3.5 top-3.5 text-gray-500 hover:text-gray-300 transition"
-      >
-        {show ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-      </button>
-    </div>
-  );
-
-  const feedbackColors = {
-    success: 'bg-[#1C1A12] border border-[#D4AF37]/30 text-[#D4AF37]',
-    error: 'bg-[#1A0F0F] border border-red-500/30 text-red-400',
-    info: 'bg-[#0F1A1C] border border-blue-500/30 text-blue-400',
   };
 
   return (
@@ -243,7 +222,7 @@ export default function Auth({
 
           {/* Feedback banner */}
           {feedback && (
-            <div className={`mb-6 p-4 rounded-xl text-xs space-y-1 ${feedbackColors[feedback.type]}`}>
+            <div className={`mb-6 p-4 rounded-xl text-xs ${feedbackColors[feedback.type]}`}>
               <p className="font-mono font-semibold">{feedback.text}</p>
             </div>
           )}
@@ -263,7 +242,7 @@ export default function Auth({
                   Email Address
                 </label>
                 <div className="relative">
-                  <Mail className="absolute left-3.5 top-3.5 w-4 h-4 text-gray-500" />
+                  <Mail className="absolute left-3.5 top-3.5 w-4 h-4 text-gray-500 pointer-events-none" />
                   <input
                     type="email"
                     required
@@ -298,18 +277,10 @@ export default function Auth({
               </button>
 
               <div className="flex justify-between text-xs font-mono text-gray-500 pt-3 border-t border-white/[0.03]">
-                <button
-                  type="button"
-                  onClick={() => { resetFields(); setMode('signup'); }}
-                  className="hover:text-white transition"
-                >
+                <button type="button" onClick={() => { resetFields(); setMode('signup'); }} className="hover:text-white transition">
                   Create Account
                 </button>
-                <button
-                  type="button"
-                  onClick={() => { resetFields(); setMode('forgot'); }}
-                  className="hover:text-white transition"
-                >
+                <button type="button" onClick={() => { resetFields(); setMode('forgot'); }} className="hover:text-white transition">
                   Forgot Password?
                 </button>
               </div>
@@ -334,7 +305,7 @@ export default function Auth({
                     Email Address
                   </label>
                   <div className="relative">
-                    <Mail className="absolute left-3.5 top-3.5 w-4 h-4 text-gray-500" />
+                    <Mail className="absolute left-3.5 top-3.5 w-4 h-4 text-gray-500 pointer-events-none" />
                     <input
                       type="email"
                       required
@@ -352,16 +323,14 @@ export default function Auth({
                     Country
                   </label>
                   <div className="relative">
-                    <Globe className="absolute left-3.5 top-3.5 w-4 h-4 text-gray-500" />
+                    <Globe className="absolute left-3.5 top-3.5 w-4 h-4 text-gray-500 pointer-events-none" />
                     <select
                       value={country}
                       onChange={(e) => setCountry(e.target.value)}
                       className="w-full bg-[#1A1A1C] border border-white/[0.06] rounded-xl py-3.5 pl-11 pr-4 text-xs text-white focus:outline-none focus:border-[#D4AF37] transition appearance-none"
                     >
                       {COUNTRIES.map((c) => (
-                        <option key={c.name} value={c.name}>
-                          {c.name}
-                        </option>
+                        <option key={c.name} value={c.name}>{c.name}</option>
                       ))}
                     </select>
                   </div>
@@ -400,7 +369,7 @@ export default function Auth({
                     Phone (Optional)
                   </label>
                   <div className="relative">
-                    <Phone className="absolute left-3.5 top-3.5 w-4 h-4 text-gray-500" />
+                    <Phone className="absolute left-3.5 top-3.5 w-4 h-4 text-gray-500 pointer-events-none" />
                     <input
                       type="text"
                       value={phone}
@@ -417,7 +386,7 @@ export default function Auth({
                     Referral Code (Optional)
                   </label>
                   <div className="relative">
-                    <ShieldCheck className="absolute left-3.5 top-3.5 w-4 h-4 text-[#C5A059]" />
+                    <ShieldCheck className="absolute left-3.5 top-3.5 w-4 h-4 text-[#C5A059] pointer-events-none" />
                     <input
                       type="text"
                       value={referralCode}
@@ -438,11 +407,7 @@ export default function Auth({
               </button>
 
               <div className="flex justify-between text-xs font-mono text-gray-500 pt-3 border-t border-white/[0.03]">
-                <button
-                  type="button"
-                  onClick={() => { resetFields(); setMode('login'); }}
-                  className="hover:text-white transition"
-                >
+                <button type="button" onClick={() => { resetFields(); setMode('login'); }} className="hover:text-white transition">
                   Already have an account? Sign in
                 </button>
               </div>
@@ -466,7 +431,7 @@ export default function Auth({
                   Email Address
                 </label>
                 <div className="relative">
-                  <Mail className="absolute left-3.5 top-3.5 w-4 h-4 text-gray-500" />
+                  <Mail className="absolute left-3.5 top-3.5 w-4 h-4 text-gray-500 pointer-events-none" />
                   <input
                     type="email"
                     required
@@ -488,11 +453,7 @@ export default function Auth({
               </button>
 
               <div className="flex justify-between text-xs font-mono text-gray-500 pt-3 border-t border-white/[0.03]">
-                <button
-                  type="button"
-                  onClick={() => { resetFields(); setMode('login'); }}
-                  className="hover:text-white transition"
-                >
+                <button type="button" onClick={() => { resetFields(); setMode('login'); }} className="hover:text-white transition">
                   Back to Sign In
                 </button>
               </div>
