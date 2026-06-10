@@ -6,7 +6,7 @@ import { Language } from '../types';
 import { TRANSLATIONS } from '../translations';
 
 interface AuthProps {
-  onNavigate: (view: 'home' | 'auth' | 'dashboard' | 'admin', payload?: any) => void;
+  onNavigate: (view: 'home' | 'auth' | 'dashboard' | 'admin' | 'privacy' | 'terms', payload?: any) => void;
   currentLanguage: Language;
   initialMode?: 'login' | 'signup';
   preSelectedPlanId?: string;
@@ -71,6 +71,19 @@ function PasswordInput({ value, onChange, placeholder, show, onToggle }: Passwor
   );
 }
 
+// ── Safe message extractor — prevents objects rendering as {} ─────────────────
+function safeMsg(val: unknown, fallback: string): string {
+  if (typeof val === 'string' && val.trim() !== '') return val;
+  if (val && typeof val === 'object') {
+    const v = val as any;
+    if (typeof v.message === 'string') return v.message;
+    if (typeof v.msg === 'string') return v.msg;
+    if (typeof v.error === 'string') return v.error;
+    const s = JSON.stringify(v);
+    return s !== '{}' ? s : fallback;
+  }
+  return fallback;
+}
 // ─────────────────────────────────────────────────────────────────────────────
 
 export default function Auth({
@@ -127,10 +140,10 @@ export default function Auth({
       if (res.success) {
         onNavigate('dashboard', { welcome: true });
       } else {
-        setFeedback({ type: 'error', text: res.message });
+        setFeedback({ type: 'error', text: safeMsg(res.message, 'Login failed. Please check your credentials.') });
       }
     } catch (err: any) {
-      setFeedback({ type: 'error', text: err.message || 'An unexpected error occurred.' });
+      setFeedback({ type: 'error', text: safeMsg(err.message ?? err, 'An unexpected error occurred.') });
     } finally {
       setIsLoading(false);
     }
@@ -156,13 +169,13 @@ export default function Auth({
     try {
       const res = await dbService.signup(email, password, phone, country, referralCode || undefined);
       if (res.success) {
-        setFeedback({ type: 'success', text: res.message });
+        setFeedback({ type: 'success', text: safeMsg(res.message, 'Account created! Please check your email to verify.') });
         setTimeout(() => setMode('login'), 4000);
       } else {
-        setFeedback({ type: 'error', text: res.message });
+        setFeedback({ type: 'error', text: safeMsg(res.message, 'Signup failed. Please try again.') });
       }
     } catch (err: any) {
-      setFeedback({ type: 'error', text: err.message || 'An unexpected error occurred.' });
+      setFeedback({ type: 'error', text: safeMsg(err.message ?? err, 'An unexpected error occurred.') });
     } finally {
       setIsLoading(false);
     }
@@ -179,9 +192,9 @@ export default function Auth({
     setFeedback(null);
     try {
       const res = await dbService.sendPasswordReset(email);
-      setFeedback({ type: res.success ? 'success' : 'error', text: res.message });
+      setFeedback({ type: res.success ? 'success' : 'error', text: safeMsg(res.message, 'If that email exists, a reset link has been sent.') });
     } catch (err: any) {
-      setFeedback({ type: 'error', text: err.message || 'An unexpected error occurred.' });
+      setFeedback({ type: 'error', text: safeMsg(err.message ?? err, 'An unexpected error occurred.') });
     } finally {
       setIsLoading(false);
     }
