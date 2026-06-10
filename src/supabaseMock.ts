@@ -13,6 +13,8 @@ import {
 } from './types';
 
 const SUPABASE_URL = 'https://jcufueffwgkgxrzssiyo.supabase.co';
+// NOTE: Replace this with your real anon/public key from:
+// Supabase Dashboard → Project Settings → API → Project API keys → anon public
 const SUPABASE_ANON_KEY = 'sb_publishable_9KxfFUZyqjb_DEHzWVSzLg_OgPvPbWw';
 
 export const supabase: SupabaseClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
@@ -110,56 +112,104 @@ export class SupabaseService {
     });
   }
 
-  // ── Auth ──────────────────────────────────────────────────────────────────
   async signup(email: string, password: string, phone: string, country: string, referralCodeUsed?: string) {
     try {
       const trimmedEmail = email.trim().toLowerCase();
       const { data, error } = await supabase.auth.signUp({
         email: trimmedEmail, password,
-        options: { emailRedirectTo: `${window.location.origin}`, data: { phone, country, referred_by_code: referralCodeUsed?.trim().toUpperCase() || null } },
+        options: {
+          emailRedirectTo: `${window.location.origin}`,
+          data: { phone, country, referred_by_code: referralCodeUsed?.trim().toUpperCase() || null }
+        },
       });
-      if (error) return { success: false, message: error.message };
-      if (!data.user) return { success: false, message: 'Signup failed.' };
+
+      if (error) {
+        const msg = typeof error.message === 'string' && error.message
+          ? error.message
+          : 'Signup failed. Please try again.';
+        return { success: false, message: msg };
+      }
+      if (!data.user) {
+        return { success: false, message: 'Signup failed. Please try again.' };
+      }
+
+      // If email already exists Supabase returns a user but with no session
+      // Detect this case and return a friendly message
+      if (!data.session && data.user.identities && data.user.identities.length === 0) {
+        return { success: false, message: 'An account with this email already exists. Please sign in.' };
+      }
 
       const referralCode = trimmedEmail.split('@')[0].toUpperCase() + '_' + Math.floor(100 + Math.random() * 900);
-      const { data: profileData } = await supabase.from('profiles').upsert({
-        id: data.user.id, email: trimmedEmail, phone: phone || null, country: country || null,
-        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
-        referral_code: referralCode,
-        referred_by_code: referralCodeUsed?.trim().toUpperCase() || null,
-        status: 'Pending Verification', kyc_status: 'None',
-        wallet_balance: 0, total_deposited: 0, pending_deposited: 0,
-        daily_earnings_accumulated: 0, referral_earnings_accumulated: 0,
-        withdrawn_amount: 0, plan_accumulated_earnings: 0,
-        is_email_verified: false,
-        notifications_enabled: { telegram: true, whatsapp: true, email: true },
-      }).select().single();
 
-      await this._logActivity(data.user.id, 'USER_REGISTERED', `New account: ${trimmedEmail}`);
-      const profile = profileData ? rowToProfile(profileData) : null;
-      this._cachedUser = profile;
-      return { success: true, message: 'Account created! Check your email to verify.', user: profile ?? undefined };
+      // Try profile upsert — if it fails due to RLS the DB trigger will handle it
+      try {
+        await supabase.from('profiles').upsert({
+          id: data.user.id,
+          email: trimmedEmail,
+          phone: phone || null,
+          country: country || null,
+          timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
+          referral_code: referralCode,
+          referred_by_code: referralCodeUsed?.trim().toUpperCase() || null,
+          status: 'Pending Verification',
+          kyc_status: 'None',
+          wallet_balance: 0,
+          total_deposited: 0,
+          pending_deposited: 0,
+          daily_earnings_accumulated: 0,
+          referral_earnings_accumulated: 0,
+          withdrawn_amount: 0,
+          plan_accumulated_earnings: 0,
+          is_email_verified: false,
+          notifications_enabled: { telegram: true, whatsapp: true, email: true },
+        });
+      } catch (profileErr) {
+        // Non-fatal — DB trigger will create the profile on auth
+        console.warn('Profile upsert skipped — trigger will handle it.');
+      }
+
+      return {
+        success: true,
+        message: 'Account created! Check your email and click the verification link before logging in.',
+      };
     } catch (err: any) {
-      return { success: false, message: err.message };
+      const msg = err?.message
+        || err?.error_description
+        || (typeof err === 'string' ? err : null)
+        || 'Unexpected error. Please try again.';
+      return { success: false, message: msg };
     }
   }
 
   async login(email: string, password: string) {
     try {
-      const { data, error } = await supabase.auth.signInWithPassword({ email: email.trim().toLowerCase(), password });
-      if (error) return { success: false, message: error.message.includes('invalid') ? 'Invalid email or password.' : error.message };
-      if (!data.user) return { success: false, message: 'Login failed.' };
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email: email.trim().toLowerCase(), password
+      });
+
+      if (error) {
+        const msg = error.message || error.code || JSON.stringify(error) || 'Login failed.';
+        const friendly = msg.toLowerCase().includes('invalid') || msg.toLowerCase().includes('credentials')
+          ? 'Invalid email or password. Please try again.'
+          : msg;
+        return { success: false, message: friendly };
+      }
+      if (!data.user) return { success: false, message: 'Login failed. Please try again.' };
 
       this._authUser = data.user;
       const profile = await this._fetchProfile(data.user.id);
-      if (!profile) return { success: false, message: 'Profile not found. Contact support.' };
-      if (profile.status === 'Banned') { await supabase.auth.signOut(); return { success: false, message: 'Account suspended.' }; }
+      if (!profile) return { success: false, message: 'Account profile not found. Contact support.' };
+      if (profile.status === 'Banned') {
+        await supabase.auth.signOut();
+        return { success: false, message: 'This account has been suspended. Contact support.' };
+      }
 
       this._cachedUser = profile;
       await this._logActivity(data.user.id, 'USER_LOGIN', `Login: ${profile.email}`);
-      return { success: true, message: 'Logged in.', user: profile };
+      return { success: true, message: 'Logged in successfully.', user: profile };
     } catch (err: any) {
-      return { success: false, message: err.message };
+      const msg = err?.message || err?.error_description || (typeof err === 'string' ? err : JSON.stringify(err)) || 'Unexpected login error.';
+      return { success: false, message: msg };
     }
   }
 
