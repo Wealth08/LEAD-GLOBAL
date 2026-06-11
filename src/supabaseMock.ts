@@ -12,19 +12,21 @@ import {
   InvestmentPlan, InvestmentPlanId, KYCData,
 } from './types';
 
-const SUPABASE_URL = 'https://jcufueffwgkgxrzssiyo.supabase.co';
-const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImpjdWZ1ZWZmd2drZ3hyenNzaXlvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA0MDYwMDQsImV4cCI6MjA5NTk4MjAwNH0.Q30wlWKbQ_6XCR4RebMVZyRd0J-Z9N-KMsSNcgE42q8';
-
-// Get this from: Supabase Dashboard → Settings → API → service_role (secret key)
-const SUPABASE_SERVICE_KEY = 'PASTE_YOUR_SERVICE_ROLE_KEY_HERE';
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || 'https://jcufueffwgkgxrzssiyo.supabase.co';
+const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImpjdWZ1ZWZmd2drZ3hyenNzaXlvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA0MDYwMDQsImV4cCI6MjA5NTk4MjAwNH0.Q30wlWKbQ_6XCR4RebMVZyRd0J-Z9N-KMsSNcgE42q8';
+const SUPABASE_SERVICE_KEY = import.meta.env.VITE_SUPABASE_SERVICE_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImpjdWZ1ZWZmd2drZ3hyenNzaXlvIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4MDQwNjAwNCwiZXhwIjoyMDk1OTgyMDA0fQ.WdaL26wkR9j054pBD5aVgYkUW5GDrhiAcccF3px4ZB8';
 
 export const supabase: SupabaseClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   auth: { autoRefreshToken: true, persistSession: true, detectSessionInUrl: true },
 });
 
-// Admin client — uses service_role to bypass RLS for admin operations
+// Admin client uses service_role key and a separate storage key to avoid conflicts
 const supabaseAdmin: SupabaseClient = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY, {
-  auth: { autoRefreshToken: false, persistSession: false },
+  auth: {
+    autoRefreshToken: false,
+    persistSession: false,
+    storageKey: 'lg-admin-auth',
+  },
 });
 
 // ─── Investment Plans ─────────────────────────────────────────────────────────
