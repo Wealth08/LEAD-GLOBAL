@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Mail, Phone, Globe, ShieldCheck, Eye, EyeOff, ArrowLeft, RefreshCw } from 'lucide-react';
 import Logo from './Logo';
-import { dbService } from '../supabaseMock';
+import { dbService, supabase } from '../supabaseMock';
 import { Language } from '../types';
 import { TRANSLATIONS } from '../translations';
 
@@ -92,6 +92,19 @@ export default function Auth({
 
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [connError, setConnError] = useState<string | null>(null);
+
+  // Test Supabase connection on mount
+  React.useEffect(() => {
+    supabase.from('profiles').select('count').limit(1).then(({ error }) => {
+      if (error) {
+        console.error('Supabase connection test failed:', error);
+        setConnError(`Connection error: ${error.message || JSON.stringify(error)}`);
+      } else {
+        setConnError(null);
+      }
+    });
+  }, []);
 
   const isRTL = currentLanguage === 'ar';
 
@@ -230,10 +243,23 @@ export default function Auth({
           {/* Gold accent bar */}
           <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-[#D4AF37] via-[#C5A059] to-[#8C6D23]" />
 
+          {/* Connection error banner */}
+          {connError && (
+            <div className="mb-4 p-3 rounded-xl bg-red-950/60 border border-red-500/30 text-red-300 text-xs font-mono">
+              <p className="font-bold mb-1">⚠ Supabase Connection Error</p>
+              <p>{connError}</p>
+              <p className="mt-1 text-red-400/70">Check your API key in supabaseMock.ts</p>
+            </div>
+          )}
+
           {/* Feedback banner */}
           {feedback && (
             <div className={`mb-6 p-4 rounded-xl text-xs ${feedbackColors[feedback.type]}`}>
-              <p className="font-mono font-semibold">{feedback.text}</p>
+              <p className="font-mono font-semibold">
+                {typeof feedback.text === 'string'
+                  ? feedback.text
+                  : JSON.stringify(feedback.text)}
+              </p>
             </div>
           )}
 

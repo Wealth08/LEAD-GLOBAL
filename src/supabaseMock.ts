@@ -15,7 +15,7 @@ import {
 const SUPABASE_URL = 'https://jcufueffwgkgxrzssiyo.supabase.co';
 // NOTE: Replace this with your real anon/public key from:
 // Supabase Dashboard → Project Settings → API → Project API keys → anon public
-const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImpjdWZ1ZWZmd2drZ3hyenNzaXlvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA0MDYwMDQsImV4cCI6MjA5NTk4MjAwNH0.Q30wlWKbQ_6XCR4RebMVZyRd0J-Z9N-KMsSNcgE42q8';
+const SUPABASE_ANON_KEY = 'sb_publishable_9KxfFUZyqjb_DEHzWVSzLg_OgPvPbWw';
 
 export const supabase: SupabaseClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   auth: { autoRefreshToken: true, persistSession: true, detectSessionInUrl: true },
@@ -115,35 +115,51 @@ export class SupabaseService {
   async signup(email: string, password: string, phone: string, country: string, referralCodeUsed?: string) {
     try {
       const trimmedEmail = email.trim().toLowerCase();
+
+      console.log('Starting signup for:', trimmedEmail);
+
       const { data, error } = await supabase.auth.signUp({
-        email: trimmedEmail, password,
+        email: trimmedEmail,
+        password,
         options: {
           emailRedirectTo: `${window.location.origin}`,
-          data: { phone, country, referred_by_code: referralCodeUsed?.trim().toUpperCase() || null }
+          data: {
+            phone,
+            country,
+            referred_by_code: referralCodeUsed?.trim().toUpperCase() || null,
+          },
         },
       });
 
+      console.log('Supabase signUp response:', { data, error });
+
       if (error) {
-        const msg = typeof error.message === 'string' && error.message
-          ? error.message
-          : 'Signup failed. Please try again.';
-        return { success: false, message: msg };
-      }
-      if (!data.user) {
-        return { success: false, message: 'Signup failed. Please try again.' };
+        console.error('Supabase signUp error:', error);
+        const msg = error.message
+          || (error as any).error_description
+          || (error as any).msg
+          || JSON.stringify(error)
+          || 'Signup failed. Please try again.';
+        return { success: false, message: String(msg) };
       }
 
-      // If email already exists Supabase returns a user but with no session
-      // Detect this case and return a friendly message
+      if (!data?.user) {
+        return { success: false, message: 'Signup failed — no user returned. Please try again.' };
+      }
+
+      // Detect duplicate email (Supabase returns user but no session + empty identities)
       if (!data.session && data.user.identities && data.user.identities.length === 0) {
-        return { success: false, message: 'An account with this email already exists. Please sign in.' };
+        return { success: false, message: 'An account with this email already exists. Please sign in instead.' };
       }
 
-      const referralCode = trimmedEmail.split('@')[0].toUpperCase() + '_' + Math.floor(100 + Math.random() * 900);
+      const referralCode =
+        trimmedEmail.split('@')[0].toUpperCase() +
+        '_' +
+        Math.floor(100 + Math.random() * 900);
 
-      // Try profile upsert — if it fails due to RLS the DB trigger will handle it
+      // Profile upsert — non-fatal if it fails, DB trigger handles it
       try {
-        await supabase.from('profiles').upsert({
+        const { error: profileError } = await supabase.from('profiles').upsert({
           id: data.user.id,
           email: trimmedEmail,
           phone: phone || null,
@@ -163,9 +179,11 @@ export class SupabaseService {
           is_email_verified: false,
           notifications_enabled: { telegram: true, whatsapp: true, email: true },
         });
-      } catch (profileErr) {
-        // Non-fatal — DB trigger will create the profile on auth
-        console.warn('Profile upsert skipped — trigger will handle it.');
+        if (profileError) {
+          console.warn('Profile upsert warning (non-fatal):', profileError.message);
+        }
+      } catch (profileErr: any) {
+        console.warn('Profile upsert exception (non-fatal):', profileErr?.message);
       }
 
       return {
@@ -173,11 +191,14 @@ export class SupabaseService {
         message: 'Account created! Check your email and click the verification link before logging in.',
       };
     } catch (err: any) {
-      const msg = err?.message
-        || err?.error_description
-        || (typeof err === 'string' ? err : null)
-        || 'Unexpected error. Please try again.';
-      return { success: false, message: msg };
+      console.error('Signup catch block error:', err);
+      const msg =
+        err?.message ||
+        err?.error_description ||
+        (typeof err === 'string' ? err : null) ||
+        JSON.stringify(err) ||
+        'Unexpected error. Please try again.';
+      return { success: false, message: String(msg) };
     }
   }
 
