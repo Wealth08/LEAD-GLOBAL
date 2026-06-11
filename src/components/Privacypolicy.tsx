@@ -33,7 +33,6 @@ const sections = [
     title: 'Your Rights',
     content: `Depending on your jurisdiction, you may have the right to access, correct, or delete your personal data, object to processing, or request data portability. To exercise any of these rights, contact us at support@leadglobal.online.`,
   },
-
   {
     title: 'Changes to This Policy',
     content: `We may update this Privacy Policy from time to time. We will notify registered users of material changes via email. Continued use of the platform after changes constitutes acceptance of the updated policy.`,
@@ -92,7 +91,6 @@ export default function PrivacyPolicy({ onNavigate }: Props) {
             For privacy-related questions, contact us at{' '}
             <a href="mailto:support@leadglobal.online" className="text-[#D4AF37] hover:underline">
               support@leadglobal.online
-            </a>
             </a>
           </p>
         </div>
